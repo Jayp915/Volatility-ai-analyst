@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b1020"><title>Volatility AI — Deriv Market Analyst</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#121b30;--line:#263550;--muted:#9aa9c2;--text:#edf3ff;--green:#27c58b;--red:#ff657a;--amber:#f4c76b}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(160deg,#0b1020,#101a2e);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}header{padding:22px max(18px,calc((100% - 1100px)/2));border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}h1{font-size:22px;margin:0;letter-spacing:.08em}h1 span{color:var(--green)}.sub,.muted{color:var(--muted)}.status{border:1px solid var(--line);border-radius:30px;padding:10px 14px;color:var(--amber)}.status.ok{color:var(--green)}main{max-width:1100px;margin:22px auto;padding:0 16px 40px}.controls{display:grid;grid-template-columns:2fr 1fr;gap:12px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}select,button{font:inherit;color:var(--text);background:#1a2740;border:1px solid var(--line);border-radius:12px;padding:13px 15px;min-height:48px}button{cursor:pointer;font-weight:700}button.primary{background:#167c60;border-color:#249c78}button:disabled{opacity:.5;cursor:wait}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:18px}.card{background:rgba(18,27,48,.92);border:1px solid var(--line);border-radius:18px;padding:18px;min-width:0}.label{font-size:12px;letter-spacing:.12em;color:var(--muted);text-transform:uppercase}.big{font-size:27px;font-weight:800;margin:8px 0}.decision{font-size:28px;font-weight:900}.green{color:var(--green)}.red{color:var(--red)}.amber{color:var(--amber)}.wide{grid-column:1/-1}.levels{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.level{background:#0e1729;border:1px solid var(--line);border-radius:12px;padding:12px}.level b{display:block;margin-top:6px;overflow-wrap:anywhere}.reason{padding:9px 0;border-bottom:1px solid #263550}.reason:last-child{border:0}.chart{height:260px;width:100%;display:block}.small{font-size:12px;color:var(--muted)}footer{color:var(--muted);font-size:12px;padding:20px 0}.error{color:var(--red);white-space:pre-wrap}.tag{display:inline-block;border:1px solid var(--line);border-radius:20px;padding:4px 9px;margin:3px;color:var(--muted);font-size:12px}
+@media(max-width:650px){.controls,.grid{grid-template-columns:1fr}.wide{grid-column:auto}.levels{grid-template-columns:1fr 1fr}header{align-items:flex-start}.decision{font-size:24px}}
+</style></head><body>
+<header><div><h1>VOLATILITY <span>AI</span></h1><div class="sub">TOP-DOWN DERIV TRADING ANALYST · V2.0</div></div><div id="status" class="status">● Not connected</div></header>
+<main><section class="controls"><select id="market"><option>Connect to load Volatility Indices</option></select><select id="style"><option value="scalp">Scalping · 1m / 5m / 15m</option><option value="intraday">Intraday · 15m / 1h / 4h</option></select></section>
+<div class="actions"><button id="connect" class="primary">Connect live data</button><button id="analyze">Analyze market</button><button id="alerts">Enable signal alerts</button></div>
+<section class="grid">
+<div class="card"><div class="label">Selected market / live price</div><div id="symbol" class="big">—</div><div id="price" class="muted">Waiting for connection</div></div>
+<div class="card"><div class="label">Analyst decision</div><div id="decision" class="decision amber">NO DATA</div><div id="confidence" class="muted">Connect to load candles</div></div>
+<div class="card"><div class="label">Higher timeframe bias</div><div id="bias" class="big">—</div><div id="biasnote" class="muted">—</div></div>
+<div class="card"><div class="label">Risk / reward plan</div><div id="rr" class="big">—</div><div class="muted">Illustrative levels only · verify before trading</div></div>
+<div class="card wide"><div class="label">Price action · selected timeframe</div><canvas id="chart" class="chart"></canvas><div id="chartnote" class="small">Candles load after analysis.</div></div>
+<div class="card wide"><div class="label">Support & resistance</div><div class="levels"><div class="level">Resistance 2<b id="r2">—</b></div><div class="level">Resistance 1<b id="r1">—</b></div><div class="level">Pivot<b id="pivot">—</b></div><div class="level">Support 1<b id="s1">—</b></div><div class="level">Support 2<b id="s2">—</b></div><div class="level">Current price<b id="last">—</b></div></div></div>
+<div class="card"><div class="label">Entry plan</div><div class="big" id="entry">—</div><div class="muted" id="entrynote">—</div></div>
+<div class="card"><div class="label">Stop loss / take profit</div><div class="big" id="stop">—</div><div class="muted" id="target">—</div></div>
+<div class="card wide"><div class="label">Why this decision?</div><div id="reasons" class="muted">No analysis yet.</div></div>
+<div class="card wide"><div class="label">Connection diagnostics</div><div id="diagnostics" class="muted">WebSocket not started.</div></div>
+</section><footer>Analysis and alerts only. No orders are placed. Technical levels are estimates from recent candles, not guaranteed support/resistance. Always confirm on Deriv MT5 or Deriv Trader and risk-manage independently.</footer></main>
+<script>
+(()=>{
+const ENDPOINT='wss://api.derivws.com/trading/v1/options/ws/public';
+let ws=null,seq=0,pending=new Map(),symbols=[],candlesByTf={},livePrice=null,alertOn=false,lastAlert='';
+const $=id=>document.getElementById(id),fmt=n=>Number.isFinite(n)?n.toLocaleString(undefined,{maximumFractionDigits:5}):'—';
+function status(t,ok=false){$('status').textContent='● '+t;$('status').className='status'+(ok?' ok':'')}
+function diag(t){$('diagnostics').textContent=t}
+function request(payload,timeout=12000){return new Promise((resolve,reject)=>{if(!ws||ws.readyState!==1)return reject(Error('WebSocket is not open'));const id=++seq;pending.set(id,{resolve,reject});payload.req_id=id;ws.send(JSON.stringify(payload));setTimeout(()=>{if(pending.has(id)){pending.delete(id);reject(Error('Request timed out: '+Object.keys(payload).filter(k=>k!=='req_id').join(',')))}},timeout)})}
+function connect(){
+ if(ws&&ws.readyState===1){loadSymbols();return}
+ status('Connecting…');diag('Opening secure WebSocket: '+ENDPOINT);
+ try{ws=new WebSocket(ENDPOINT)}catch(e){status('Browser blocked WebSocket');diag(e.message);return}
+ const timer=setTimeout(()=>{if(ws&&ws.readyState!==1){status('Connection timeout');diag('No WebSocket handshake within 15 seconds. Try another network or disable VPN/ad-blocking temporarily.')}},15000);
+ ws.onopen=async()=>{clearTimeout(timer);status('Connected · loading symbols',true);diag('WebSocket handshake successful. Requesting active_symbols…');try{await loadSymbols()}catch(e){status('Symbol request failed');diag(e.message)}};
+ ws.onmessage=ev=>{let d;try{d=JSON.parse(ev.data)}catch{return}
+ if(d.req_id&&pending.has(d.req_id)){const p=pending.get(d.req_id);pending.delete(d.req_id);if(d.error)p.reject(Error(d.error.message));else p.resolve(d);return}
+ if(d.msg_type==='tick'&&d.tick){livePrice=Number(d.tick.quote);$('price').textContent='Live: '+fmt(livePrice)+' · '+new Date(d.tick.epoch*1000).toLocaleTimeString();$('last').textContent=fmt(livePrice)}
+ };
+ ws.onerror=()=>{status('WebSocket error');diag('Browser reported a WebSocket handshake/network error. This occurs before Deriv can return a market-data response. Check network restrictions, VPN, Private DNS or browser extensions.')};
+ ws.onclose=e=>{clearTimeout(timer);status('Disconnected');diag('Socket closed · code '+e.code+' · '+(e.reason||'no reason supplied'));for(const p of pending.values())p.reject(Error('Socket closed'));pending.clear()};
+}
+async function loadSymbols(){
+ const d=await request({active_symbols:'full'});const all=d.active_symbols||[];
+ symbols=all.filter(x=>/volatility/i.test([x.display_name,x.market_display_name,x.submarket_display_name,x.market,x.submarket,x.subgroup].filter(Boolean).join(' ')));
+ const sel=$('market');sel.innerHTML='';
+ symbols.sort((a,b)=>(a.display_name||a.symbol).localeCompare(b.display_name||b.symbol));
+ for(const x of symbols){const o=document.createElement('option');o.value=x.symbol;o.textContent=(x.display_name||x.symbol)+' ('+x.symbol+')';sel.appendChild(o)}
+ if(!symbols.length){sel.innerHTML='<option value="">No Volatility indices returned</option>';status('Connected · no matching indices');diag('Connected, but active_symbols returned no names containing “Volatility”.');return}
+ status('Connected · '+symbols.length+' indices found',true);diag('Connection and active_symbols request successful. Found '+symbols.length+' volatility symbols.');$('symbol').textContent=sel.options[0].textContent;subscribeTicks();
+}
+function subscribeTicks(){if(ws?.readyState===1&&$('market').value)request({ticks:$('market').value,subscribe:1}).catch(e=>diag('Tick subscription: '+e.message))}
+function tfSet(){return $('style').value==='scalp'?[60,300,900]:[900,3600,14400]}
+async function getCandles(sym,granularity){const d=await request({ticks_history:sym,count:180,end:'latest',style:'candles',granularity});return (d.candles||[]).map(c=>({epoch:+c.epoch,open:+c.open,high:+c.high,low:+c.low,close:+c.close})).filter(c=>[c.open,c.high,c.low,c.close].every(Number.isFinite))}
+function ema(a,n){let k=2/(n+1),v=a[0];for(let i=1;i<a.length;i++)v=a[i]*k+v*(1-k);return v}
+function rsi(a,n=14){let up=0,dn=0;for(let i=a.length-n;i<a.length;i++){let d=a[i]-a[i-1];if(d>0)up+=d;else dn-=d}if(dn===0)return 100;return 100-100/(1+up/dn)}
+function atr(cs,n=14){let x=[];for(let i=1;i<cs.length;i++)x.push(Math.max(cs[i].high-cs[i].low,Math.abs(cs[i].high-cs[i-1].close),Math.abs(cs[i].low-cs[i-1].close)));return x.slice(-n).reduce((a,b)=>a+b,0)/Math.min(n,x.length)}
+function levels(cs){const recent=cs.slice(-60),hi=Math.max(...recent.map(x=>x.high)),lo=Math.min(...recent.map(x=>x.low)),last=cs.at(-1).close,mid=(hi+lo+last)/3;return {r2:mid+(hi-lo),r1:2*mid-lo,p:mid,s1:2*mid-hi,s2:mid-(hi-lo),hi,lo}}
+function draw(cs){const c=$('chart'),ctx=c.getContext('2d'),w=c.clientWidth||700,h=260,dpr=devicePixelRatio||1;c.width=w*dpr;c.height=h*dpr;ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);const a=cs.slice(-65),min=Math.min(...a.map(x=>x.low)),max=Math.max(...a.map(x=>x.high)),pad=(max-min)*.08||1;const y=v=>h-16-(v-min+pad)/(max-min+2*pad)*(h-32),step=w/a.length;ctx.strokeStyle='#293955';ctx.lineWidth=1;for(let i=0;i<5;i++){let yy=16+i*(h-32)/4;ctx.beginPath();ctx.moveTo(0,yy);ctx.lineTo(w,yy);ctx.stroke()}a.forEach((x,i)=>{let xx=i*step+step/2;ctx.strokeStyle=x.close>=x.open?'#27c58b':'#ff657a';ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();ctx.moveTo(xx,y(x.high));ctx.lineTo(xx,y(x.low));ctx.stroke();let top=y(Math.max(x.open,x.close)),bot=y(Math.min(x.open,x.close));ctx.fillRect(xx-step*.28,top,step*.56,Math.max(1,bot-top))})}
+async function analyze(){
+ const sym=$('market').value;if(!sym){diag('Choose a market after connecting.');return}
+ $('analyze').disabled=true;status('Fetching top-down candles…');
+ try{
+ const gs=tfSet(),sets=await Promise.all(gs.map(g=>getCandles(sym,g)));candlesByTf={};gs.forEach((g,i)=>candlesByTf[g]=sets[i]);
+ if(sets.some(x=>x.length<55))throw Error('Not enough candle history returned for all selected timeframes.');
+ const [fast,mid,high]=sets,cl=fast.map(x=>x.close),mc=mid.map(x=>x.close),hc=high.map(x=>x.close);
+ const ef=ema(cl.slice(-50),20),es=ema(cl.slice(-50),50),em=ema(mc.slice(-50),20),eh=ema(hc.slice(-50),20),rv=rsi(cl),av=atr(fast),lv=levels(fast),last=cl.at(-1);
+ const bias=eh>ema(hc.slice(-50),50)?'BULLISH':eh<ema(hc.slice(-50),50)?'BEARISH':'NEUTRAL';
+ const midBias=em>ema(mc.slice(-50),50)?'BULLISH':em<ema(mc.slice(-50),50)?'BEARISH':'NEUTRAL';
+ const fastBias=ef>es?'BULLISH':ef<es?'BEARISH':'NEUTRAL';
+ let score=(bias==='BULLISH'?1:bias==='BEARISH'?-1:0)+(midBias==='BULLISH'?1:midBias==='BEARISH'?-1:0)+(fastBias==='BULLISH'?1:fastBias==='BEARISH'?-1:0);
+ const nearRes=(lv.r1-last)<av*.35&&(lv.r1-last)>=0,nearSup=(last-lv.s1)<av*.35&&(last-lv.s1)>=0;
+ let decision='WAIT',why=['Higher timeframe: '+bias,'Middle timeframe: '+midBias,'Entry timeframe: '+fastBias,'RSI(14): '+rv.toFixed(1),'ATR(14): '+fmt(av)];
+ if(score>=2&&rv<70&&!nearRes)decision='BUY SETUP';
+ else if(score<=-2&&rv>30&&!nearSup)decision='SELL SETUP';
+ else why.push('No trade: timeframe alignment or nearby support/resistance is not sufficiently clear.');
+ if(nearRes)why.push('Price is close to resistance; avoid chasing a long entry.');
+ if(nearSup)why.push('Price is close to support; avoid chasing a short entry.');
+ const long=decision==='BUY SETUP',short=decision==='SELL SETUP',entry=last,stop=long?Math.min(lv.s1,last-1.5*av):short?Math.max(lv.r1,last+1.5*av):NaN,target=long?last+2*(last-stop):short?last-2*(stop-last):NaN;
+ $('symbol').textContent=sym;$('decision').textContent=decision;$('decision').className='decision '+(long?'green':short?'red':'amber');$('confidence').textContent='Rule-based confluence · '+Math.abs(score)+'/3 timeframe alignment';$('bias').textContent=bias;$('biasnote').textContent='Mid: '+midBias+' · Entry: '+fastBias;
+ $('rr').textContent=long||short?'1 : 2 (planned)':'No trade plan';$('entry').textContent=long||short?fmt(entry):'Wait';$('entrynote').textContent=long?'Only after a bullish candle confirms.':short?'Only after a bearish candle confirms.':'Wait for clearer alignment and a candle close.';
+ $('stop').textContent=long||short?fmt(stop):'—';$('target').textContent=long||short?'Target: '+fmt(target):'—';
+ for(const [id,val] of Object.entries({r2:lv.r2,r1:lv.r1,pivot:lv.p,s1:lv.s1,s2:lv.s2,last}))$(id).textContent=fmt(val);
+ $('reasons').innerHTML=why.map(x=>'<div class="reason">'+x.replaceAll('&','&amp;').replaceAll('<','&lt;')+'</div>').join('');$('chartnote').textContent='Latest '+(gs[0]/60)+'-minute candles · '+fast.length+' bars';draw(fast);status('Analysis updated',true);diag('Market data received successfully. Last analysis: '+new Date().toLocaleString());
+ if(alertOn&&decision!=='WAIT'&&decision!==lastAlert){if('Notification'in window&&Notification.permission==='granted')new Notification('Volatility AI: '+decision,{body:sym+' · Price '+fmt(last)});lastAlert=decision}
+ }catch(e){status('Analysis failed');diag(e.message)}finally{$('analyze').disabled=false}
+}
+$('connect').onclick=connect;$('analyze').onclick=analyze;$('market').onchange=()=>{const o=$('market').selectedOptions[0];$('symbol').textContent=o?.textContent||'—';livePrice=null;subscribeTicks()};$('style').onchange=()=>{if($('market').value)analyze()};$('alerts').onclick=async()=>{if(!('Notification'in window)){alert('Browser notifications are not supported.');return}const p=await Notification.requestPermission();alertOn=p==='granted';$('alerts').textContent=alertOn?'Alerts enabled':'Enable signal alerts'};
+window.addEventListener('resize',()=>{const g=tfSet();if(candlesByTf[g[0]])draw(candlesByTf[g[0]])});
+})();
+</script></body></html>
