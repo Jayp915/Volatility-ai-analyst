@@ -23,26 +23,43 @@
 <script>
 (()=>{
 const ENDPOINT='wss://api.derivws.com/trading/v1/options/ws/public';
-let ws=null,seq=0,pending=new Map(),symbols=[],candlesByTf={},livePrice=null,alertOn=false,lastAlert='';
+let ws=null,seq=0,pending=new Map(),symbols=[],candlesByTf={},livePrice=null,alertOn=false,lastAlert='',activeTickSubscriptionId=null,activeTickSymbol=null,analysisRun=0;
 const $=id=>document.getElementById(id),fmt=n=>Number.isFinite(n)?n.toLocaleString(undefined,{maximumFractionDigits:5}):'—';
 function status(t,ok=false){$('status').textContent='● '+t;$('status').className='status'+(ok?' ok':'')}
 function diag(t){$('diagnostics').textContent=t}
 function request(payload,timeout=12000){return new Promise((resolve,reject)=>{if(!ws||ws.readyState!==1)return reject(Error('WebSocket is not open'));const id=++seq;pending.set(id,{resolve,reject});payload.req_id=id;ws.send(JSON.stringify(payload));setTimeout(()=>{if(pending.has(id)){pending.delete(id);reject(Error('Request timed out: '+Object.keys(payload).filter(k=>k!=='req_id').join(',')))}},timeout)})}
+function showTick(tick){
+ if(!tick)return;
+ const selected=$('market').value;
+ // Ignore late ticks from a previously selected index.
+ if(tick.symbol&&selected&&tick.symbol!==selected)return;
+ const q=Number(tick.quote);if(!Number.isFinite(q))return;
+ livePrice=q;
+ const when=tick.epoch?new Date(Number(tick.epoch)*1000).toLocaleTimeString():'just now';
+ $('price').textContent='LIVE PRICE: '+fmt(q)+' · '+when;
+ $('last').textContent=fmt(q);
+ $('symbol').textContent=$('market').selectedOptions[0]?.textContent||selected||'Selected market';
+}
+function clearAnalysis(){
+ analysisRun++;candlesByTf={};lastAlert='';
+ for(const id of ['decision','bias','rr','entry','stop','target','r2','r1','pivot','s1','s2','last'])$(id).textContent='—';
+ $('decision').textContent='LOADING';$('confidence').textContent='Loading fresh candles for selected index…';
+ $('biasnote').textContent='—';$('entrynote').textContent='—';$('target').textContent='—';
+ $('reasons').textContent='Waiting for fresh analysis.';$('chartnote').textContent='Loading candles for selected market…';
+ const cv=$('chart'),ctx=cv.getContext('2d');ctx.clearRect(0,0,cv.width,cv.height);
+ $('rr').textContent='—';$('symbol').textContent=$('market').selectedOptions[0]?.textContent||'—';
+}
 function connect(){
  if(ws&&ws.readyState===1){loadSymbols();return}
  status('Connecting…');diag('Opening secure WebSocket: '+ENDPOINT);
  try{ws=new WebSocket(ENDPOINT)}catch(e){status('Browser blocked WebSocket');diag(e.message);return}
  const timer=setTimeout(()=>{if(ws&&ws.readyState!==1){status('Connection timeout');diag('No WebSocket handshake within 15 seconds. Try another network or disable VPN/ad-blocking temporarily.')}},15000);
  ws.onopen=async()=>{clearTimeout(timer);status('Connected · loading symbols',true);diag('WebSocket handshake successful. Requesting active_symbols…');try{await loadSymbols()}catch(e){status('Symbol request failed');diag(e.message)}};
- function showTick(tick){
-   if(!tick)return;
-   const q=Number(tick.quote); if(!Number.isFinite(q))return;
-   livePrice=q; const when=tick.epoch?new Date(Number(tick.epoch)*1000).toLocaleTimeString():'just now';
-   $('price').textContent='LIVE PRICE: '+fmt(q)+' · '+when; $('last').textContent=fmt(q);
-   $('symbol').textContent=$('market').selectedOptions[0]?.textContent||$('market').value||'Selected market';
- }
  ws.onmessage=ev=>{let d;try{d=JSON.parse(ev.data)}catch{return}
- if(d.msg_type==='tick'&&d.tick)showTick(d.tick);
+ if(d.msg_type==='tick'&&d.tick){
+   const sid=d.subscription?.id;
+   if((!activeTickSymbol||activeTickSymbol===$('market').value)&&(!sid||!activeTickSubscriptionId||sid===activeTickSubscriptionId))showTick(d.tick);
+ }
  if(d.req_id&&pending.has(d.req_id)){const p=pending.get(d.req_id);pending.delete(d.req_id);if(d.error)p.reject(Error(d.error.message));else p.resolve(d);return}
  if(d.msg_type==='history'&&d.history?.prices?.length){const n=d.history.prices.length-1;showTick({quote:d.history.prices[n],epoch:d.history.times?.[n]})}
  };
@@ -78,12 +95,28 @@ async function loadSymbols(){
  $('symbol').textContent=sel.options[0].textContent;subscribeTicks();
 }
 async function subscribeTicks(){
- const sym=$('market').value; if(ws?.readyState!==1||!sym)return;
- $('price').textContent='Requesting live price for '+sym+'…'; $('symbol').textContent=$('market').selectedOptions[0]?.textContent||sym;
- try{const first=await request({ticks:sym,subscribe:1});if(first.tick)showTick(first.tick);diag('Live tick subscription active for '+sym+'. Waiting for continuous price updates.')}
- catch(e){diag('Live tick subscription failed: '+e.message+' · Trying one-shot latest tick history…');
-  try{const h=await request({ticks_history:sym,count:1,end:'latest',style:'ticks'});const n=(h.history?.prices||[]).length-1;if(n>=0)showTick({quote:h.history.prices[n],epoch:h.history.times?.[n]});else throw Error('Deriv returned no latest tick price.')}
-  catch(err){$('price').textContent='Price unavailable: '+err.message;diag('Could not retrieve live or latest price: '+err.message)}
+ const sym=$('market').value;if(ws?.readyState!==1||!sym)return;
+ // Detach the old stream before subscribing to a different market.
+ if(activeTickSubscriptionId){const oldId=activeTickSubscriptionId;activeTickSubscriptionId=null;try{await request({forget:oldId})}catch(e){}}
+ activeTickSymbol=sym;livePrice=null;
+ $('price').textContent='Requesting live price for '+sym+'…';
+ $('symbol').textContent=$('market').selectedOptions[0]?.textContent||sym;
+ try{
+   const first=await request({ticks:sym,subscribe:1});
+   if($('market').value!==sym)return;
+   if(first.subscription?.id)activeTickSubscriptionId=first.subscription.id;
+   if(first.tick)showTick(first.tick);
+   diag('Live tick subscription active for '+sym+'.');
+ }catch(e){
+   if($('market').value!==sym)return;
+   diag('Live tick subscription failed: '+e.message+' · Requesting latest tick…');
+   try{
+     const h=await request({ticks_history:sym,count:1,end:'latest',style:'ticks'});
+     if($('market').value!==sym)return;
+     const n=(h.history?.prices||[]).length-1;
+     if(n>=0)showTick({symbol:sym,quote:h.history.prices[n],epoch:h.history.times?.[n]});
+     else throw Error('Deriv returned no latest tick price.');
+   }catch(err){if($('market').value===sym){$('price').textContent='Price unavailable: '+err.message;diag('Could not retrieve price: '+err.message)}}
  }
 }
 function tfSet(){return $('style').value==='scalp'?[60,300,900]:[900,3600,14400]}
@@ -95,9 +128,9 @@ function levels(cs){const recent=cs.slice(-60),hi=Math.max(...recent.map(x=>x.hi
 function draw(cs){const c=$('chart'),ctx=c.getContext('2d'),w=c.clientWidth||700,h=260,dpr=devicePixelRatio||1;c.width=w*dpr;c.height=h*dpr;ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);const a=cs.slice(-65),min=Math.min(...a.map(x=>x.low)),max=Math.max(...a.map(x=>x.high)),pad=(max-min)*.08||1;const y=v=>h-16-(v-min+pad)/(max-min+2*pad)*(h-32),step=w/a.length;ctx.strokeStyle='#293955';ctx.lineWidth=1;for(let i=0;i<5;i++){let yy=16+i*(h-32)/4;ctx.beginPath();ctx.moveTo(0,yy);ctx.lineTo(w,yy);ctx.stroke()}a.forEach((x,i)=>{let xx=i*step+step/2;ctx.strokeStyle=x.close>=x.open?'#27c58b':'#ff657a';ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();ctx.moveTo(xx,y(x.high));ctx.lineTo(xx,y(x.low));ctx.stroke();let top=y(Math.max(x.open,x.close)),bot=y(Math.min(x.open,x.close));ctx.fillRect(xx-step*.28,top,step*.56,Math.max(1,bot-top))})}
 async function analyze(){
  const sym=$('market').value;if(!sym){diag('Choose a market after connecting.');return}
- $('analyze').disabled=true;status('Fetching top-down candles…');
+ const run=++analysisRun;$('analyze').disabled=true;status('Fetching top-down candles for '+sym+'…');
  try{
- const gs=tfSet(),sets=await Promise.all(gs.map(g=>getCandles(sym,g)));candlesByTf={};gs.forEach((g,i)=>candlesByTf[g]=sets[i]);
+ const gs=tfSet(),sets=await Promise.all(gs.map(g=>getCandles(sym,g)));if(run!==analysisRun||$('market').value!==sym)return;candlesByTf={};gs.forEach((g,i)=>candlesByTf[g]=sets[i]);
  if(sets.some(x=>x.length<55))throw Error('Not enough candle history returned for all selected timeframes.');
  const [fast,mid,high]=sets,cl=fast.map(x=>x.close),mc=mid.map(x=>x.close),hc=high.map(x=>x.close);
  const ef=ema(cl.slice(-50),20),es=ema(cl.slice(-50),50),em=ema(mc.slice(-50),20),eh=ema(hc.slice(-50),20),rv=rsi(cl),av=atr(fast),lv=levels(fast),last=cl.at(-1);
@@ -121,7 +154,7 @@ async function analyze(){
  if(alertOn&&decision!=='WAIT'&&decision!==lastAlert){if('Notification'in window&&Notification.permission==='granted')new Notification('Volatility AI: '+decision,{body:sym+' · Price '+fmt(last)});lastAlert=decision}
  }catch(e){status('Analysis failed');diag(e.message)}finally{$('analyze').disabled=false}
 }
-$('connect').onclick=connect;$('analyze').onclick=analyze;$('market').onchange=()=>{const o=$('market').selectedOptions[0];$('symbol').textContent=o?.textContent||'—';livePrice=null;subscribeTicks()};$('style').onchange=()=>{if($('market').value)analyze()};$('alerts').onclick=async()=>{if(!('Notification'in window)){alert('Browser notifications are not supported.');return}const p=await Notification.requestPermission();alertOn=p==='granted';$('alerts').textContent=alertOn?'Alerts enabled':'Enable signal alerts'};
+$('connect').onclick=connect;$('analyze').onclick=analyze;$('market').onchange=async()=>{clearAnalysis();const sym=$('market').value;$('price').textContent='Switching to '+sym+'…';if(ws?.readyState===1){await subscribeTicks();if($('market').value===sym)await analyze()}else{$('price').textContent='Connect to load live price';}};$('style').onchange=()=>{if($('market').value)analyze()};$('alerts').onclick=async()=>{if(!('Notification'in window)){alert('Browser notifications are not supported.');return}const p=await Notification.requestPermission();alertOn=p==='granted';$('alerts').textContent=alertOn?'Alerts enabled':'Enable signal alerts'};
 window.addEventListener('resize',()=>{const g=tfSet();if(candlesByTf[g[0]])draw(candlesByTf[g[0]])});
 })();
 </script></body></html>
