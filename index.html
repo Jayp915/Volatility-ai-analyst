@@ -34,9 +34,17 @@ function connect(){
  try{ws=new WebSocket(ENDPOINT)}catch(e){status('Browser blocked WebSocket');diag(e.message);return}
  const timer=setTimeout(()=>{if(ws&&ws.readyState!==1){status('Connection timeout');diag('No WebSocket handshake within 15 seconds. Try another network or disable VPN/ad-blocking temporarily.')}},15000);
  ws.onopen=async()=>{clearTimeout(timer);status('Connected · loading symbols',true);diag('WebSocket handshake successful. Requesting active_symbols…');try{await loadSymbols()}catch(e){status('Symbol request failed');diag(e.message)}};
+ function showTick(tick){
+   if(!tick)return;
+   const q=Number(tick.quote); if(!Number.isFinite(q))return;
+   livePrice=q; const when=tick.epoch?new Date(Number(tick.epoch)*1000).toLocaleTimeString():'just now';
+   $('price').textContent='LIVE PRICE: '+fmt(q)+' · '+when; $('last').textContent=fmt(q);
+   $('symbol').textContent=$('market').selectedOptions[0]?.textContent||$('market').value||'Selected market';
+ }
  ws.onmessage=ev=>{let d;try{d=JSON.parse(ev.data)}catch{return}
+ if(d.msg_type==='tick'&&d.tick)showTick(d.tick);
  if(d.req_id&&pending.has(d.req_id)){const p=pending.get(d.req_id);pending.delete(d.req_id);if(d.error)p.reject(Error(d.error.message));else p.resolve(d);return}
- if(d.msg_type==='tick'&&d.tick){livePrice=Number(d.tick.quote);$('price').textContent='Live: '+fmt(livePrice)+' · '+new Date(d.tick.epoch*1000).toLocaleTimeString();$('last').textContent=fmt(livePrice)}
+ if(d.msg_type==='history'&&d.history?.prices?.length){const n=d.history.prices.length-1;showTick({quote:d.history.prices[n],epoch:d.history.times?.[n]})}
  };
  ws.onerror=()=>{status('WebSocket error');diag('Browser reported a WebSocket handshake/network error. This occurs before Deriv can return a market-data response. Check network restrictions, VPN, Private DNS or browser extensions.')};
  ws.onclose=e=>{clearTimeout(timer);status('Disconnected');diag('Socket closed · code '+e.code+' · '+(e.reason||'no reason supplied'));for(const p of pending.values())p.reject(Error('Socket closed'));pending.clear()};
@@ -69,7 +77,15 @@ async function loadSymbols(){
  diag('Connection and active_symbols request successful. Found '+symbols.length+' Volatility indices using current and legacy response fields.');
  $('symbol').textContent=sel.options[0].textContent;subscribeTicks();
 }
-function subscribeTicks(){if(ws?.readyState===1&&$('market').value)request({ticks:$('market').value,subscribe:1}).catch(e=>diag('Tick subscription: '+e.message))}
+async function subscribeTicks(){
+ const sym=$('market').value; if(ws?.readyState!==1||!sym)return;
+ $('price').textContent='Requesting live price for '+sym+'…'; $('symbol').textContent=$('market').selectedOptions[0]?.textContent||sym;
+ try{const first=await request({ticks:sym,subscribe:1});if(first.tick)showTick(first.tick);diag('Live tick subscription active for '+sym+'. Waiting for continuous price updates.')}
+ catch(e){diag('Live tick subscription failed: '+e.message+' · Trying one-shot latest tick history…');
+  try{const h=await request({ticks_history:sym,count:1,end:'latest',style:'ticks'});const n=(h.history?.prices||[]).length-1;if(n>=0)showTick({quote:h.history.prices[n],epoch:h.history.times?.[n]});else throw Error('Deriv returned no latest tick price.')}
+  catch(err){$('price').textContent='Price unavailable: '+err.message;diag('Could not retrieve live or latest price: '+err.message)}
+ }
+}
 function tfSet(){return $('style').value==='scalp'?[60,300,900]:[900,3600,14400]}
 async function getCandles(sym,granularity){const d=await request({ticks_history:sym,count:180,end:'latest',style:'candles',granularity});return (d.candles||[]).map(c=>({epoch:+c.epoch,open:+c.open,high:+c.high,low:+c.low,close:+c.close})).filter(c=>[c.open,c.high,c.low,c.close].every(Number.isFinite))}
 function ema(a,n){let k=2/(n+1),v=a[0];for(let i=1;i<a.length;i++)v=a[i]*k+v*(1-k);return v}
