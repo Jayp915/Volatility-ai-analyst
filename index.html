@@ -42,13 +42,32 @@ function connect(){
  ws.onclose=e=>{clearTimeout(timer);status('Disconnected');diag('Socket closed · code '+e.code+' · '+(e.reason||'no reason supplied'));for(const p of pending.values())p.reject(Error('Socket closed'));pending.clear()};
 }
 async function loadSymbols(){
- const d=await request({active_symbols:'full'});const all=d.active_symbols||[];
- symbols=all.filter(x=>/volatility/i.test([x.display_name,x.market_display_name,x.submarket_display_name,x.market,x.submarket,x.subgroup].filter(Boolean).join(' ')));
+ // The current Deriv public API renamed symbol/display_name to
+ // underlying_symbol/underlying_symbol_name. Normalize both schemas.
+ const d=await request({active_symbols:'full'});
+ const all=Array.isArray(d.active_symbols)?d.active_symbols:[];
+ symbols=all.filter(x=>{
+   const name=[x.underlying_symbol_name,x.display_name,x.symbol_name].filter(Boolean).join(' ');
+   const market=[x.market,x.submarket,x.subgroup].filter(Boolean).join(' ');
+   return /volatility/i.test(name) || (/synthetic_index/i.test(x.market||'') && /random_index/i.test(x.submarket||'') && /volatility/i.test(x.underlying_symbol||x.symbol||''));
+ }).map(x=>({
+   ...x,
+   symbol:x.underlying_symbol||x.symbol,
+   display_name:x.underlying_symbol_name||x.display_name||x.underlying_symbol||x.symbol
+ })).filter(x=>x.symbol);
  const sel=$('market');sel.innerHTML='';
  symbols.sort((a,b)=>(a.display_name||a.symbol).localeCompare(b.display_name||b.symbol));
  for(const x of symbols){const o=document.createElement('option');o.value=x.symbol;o.textContent=(x.display_name||x.symbol)+' ('+x.symbol+')';sel.appendChild(o)}
- if(!symbols.length){sel.innerHTML='<option value="">No Volatility indices returned</option>';status('Connected · no matching indices');diag('Connected, but active_symbols returned no names containing “Volatility”.');return}
- status('Connected · '+symbols.length+' indices found',true);diag('Connection and active_symbols request successful. Found '+symbols.length+' volatility symbols.');$('symbol').textContent=sel.options[0].textContent;subscribeTicks();
+ if(!symbols.length){
+   sel.innerHTML='<option value="">No Volatility indices returned</option>';
+   status('Connected · no matching indices');
+   const sample=all.slice(0,4).map(x=>JSON.stringify({underlying_symbol:x.underlying_symbol,symbol:x.symbol,underlying_symbol_name:x.underlying_symbol_name,display_name:x.display_name,market:x.market,submarket:x.submarket,subgroup:x.subgroup})).join(' | ');
+   diag('Deriv returned '+all.length+' active symbols, but none matched the Volatility filter. Sample response fields: '+(sample||'No active_symbols array was returned')+'.');
+   return;
+ }
+ status('Connected · '+symbols.length+' indices found',true);
+ diag('Connection and active_symbols request successful. Found '+symbols.length+' Volatility indices using current and legacy response fields.');
+ $('symbol').textContent=sel.options[0].textContent;subscribeTicks();
 }
 function subscribeTicks(){if(ws?.readyState===1&&$('market').value)request({ticks:$('market').value,subscribe:1}).catch(e=>diag('Tick subscription: '+e.message))}
 function tfSet(){return $('style').value==='scalp'?[60,300,900]:[900,3600,14400]}
