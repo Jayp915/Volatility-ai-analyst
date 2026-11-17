@@ -3,6 +3,18 @@
 <style>
 :root{color-scheme:dark;--bg:#0b1020;--panel:#121b30;--line:#263550;--muted:#9aa9c2;--text:#edf3ff;--green:#27c58b;--red:#ff657a;--amber:#f4c76b}
 *{box-sizing:border-box}body{margin:0;background:linear-gradient(160deg,#0b1020,#101a2e);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}header{padding:22px max(18px,calc((100% - 1100px)/2));border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}h1{font-size:22px;margin:0;letter-spacing:.08em}h1 span{color:var(--green)}.sub,.muted{color:var(--muted)}.status{border:1px solid var(--line);border-radius:30px;padding:10px 14px;color:var(--amber)}.status.ok{color:var(--green)}main{max-width:1100px;margin:22px auto;padding:0 16px 40px}.controls{display:grid;grid-template-columns:2fr 1fr;gap:12px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}select,button{font:inherit;color:var(--text);background:#1a2740;border:1px solid var(--line);border-radius:12px;padding:13px 15px;min-height:48px}button{cursor:pointer;font-weight:700}button.primary{background:#167c60;border-color:#249c78}button:disabled{opacity:.5;cursor:wait}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:18px}.card{background:rgba(18,27,48,.92);border:1px solid var(--line);border-radius:18px;padding:18px;min-width:0}.label{font-size:12px;letter-spacing:.12em;color:var(--muted);text-transform:uppercase}.big{font-size:27px;font-weight:800;margin:8px 0}.decision{font-size:28px;font-weight:900}.green{color:var(--green)}.red{color:var(--red)}.amber{color:var(--amber)}.wide{grid-column:1/-1}.levels{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.level{background:#0e1729;border:1px solid var(--line);border-radius:12px;padding:12px}.level b{display:block;margin-top:6px;overflow-wrap:anywhere}.reason{padding:9px 0;border-bottom:1px solid #263550}.reason:last-child{border:0}.chart{height:260px;width:100%;display:block}.small{font-size:12px;color:var(--muted)}footer{color:var(--muted);font-size:12px;padding:20px 0}.error{color:var(--red);white-space:pre-wrap}.tag{display:inline-block;border:1px solid var(--line);border-radius:20px;padding:4px 9px;margin:3px;color:var(--muted);font-size:12px}
+.market-list,.signal-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}
+.market-card,.signal-card{background:#0e1729;border:1px solid var(--line);border-radius:14px;padding:13px;min-width:0}
+.market-card .name,.signal-card .name{font-weight:800;overflow-wrap:anywhere}
+.scoreline{display:flex;justify-content:space-between;gap:8px;margin:8px 0;color:var(--muted);font-size:12px}
+.scorebar{height:7px;background:#263550;border-radius:8px;overflow:hidden}.scorebar span{display:block;height:100%;background:var(--green)}
+.signal-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.signal-card.buy{border-left:3px solid var(--green)}.signal-card.sell{border-left:3px solid var(--red)}
+.signal-price{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px;font-size:12px}
+.signal-price div{background:#121b30;border-radius:8px;padding:8px;overflow-wrap:anywhere}
+.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}
+.stat{background:#0e1729;border:1px solid var(--line);border-radius:12px;padding:10px}.stat b{display:block;font-size:20px;margin-top:4px}
+@media(max-width:650px){.market-list,.signal-list,.signal-columns{grid-template-columns:1fr}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.actions button{flex:1 1 calc(50% - 8px);font-size:13px;padding:11px 9px}header{padding:16px}.card{padding:14px}main{padding:0 10px 30px}.status{font-size:12px}.sub{font-size:11px}}
 @media(max-width:650px){.controls,.grid{grid-template-columns:1fr}.wide{grid-column:auto}.levels{grid-template-columns:1fr 1fr}header{align-items:flex-start}.decision{font-size:24px}}
 </style></head><body>
 <header><div><h1>VOLATILITY <span>AI</span></h1><div class="sub">MARKET QUALITY + CLOSED-CANDLE ANALYST · V3.0</div></div><div id="status" class="status">● Not connected</div></header>
@@ -18,12 +30,14 @@
 <div class="card"><div class="label">Entry plan</div><div class="big" id="entry">—</div><div class="muted" id="entrynote">—</div></div>
 <div class="card"><div class="label">Stop loss / take profit</div><div class="big" id="stop">—</div><div class="muted" id="target">—</div></div>
 <div class="card wide"><div class="label">Why this decision?</div><div id="reasons" class="muted">No analysis yet.</div></div>
-<div class="card wide"><div class="label">Connection diagnostics</div><div id="diagnostics" class="muted">WebSocket not started.</div></div><div class="card wide"><div class="label">All-market structure scanner</div><div id="scanSummary" class="muted">Press “Scan all markets” to rank every discovered Volatility Index across 15m, 30m, 2h, 3h and 4h.</div><div id="scanTable" style="overflow-x:auto;margin-top:12px"></div></div><div class="card wide"><div class="label">Confirmed entry signals</div><div id="signalSummary" class="muted">No confirmed signals yet. Signals appear only after a qualifying candle closes.</div><div id="signalTable" style="overflow-x:auto;margin-top:12px"></div></div>
+<div class="card wide"><div class="label">Connection diagnostics</div><div id="diagnostics" class="muted">WebSocket not started.</div></div><div class="card wide"><div class="label">All-market structure scanner</div><div id="scanSummary" class="muted">Press “Scan all markets” to rank every discovered Volatility Index across 15m, 30m, 2h, 3h and 4h.</div><div id="scanTable" style="overflow-x:auto;margin-top:12px"></div></div><div class="card wide"><div class="label">Signal performance tracker</div><div class="stats-grid" id="performanceStats"></div><div id="performanceNote" class="small">Signals are tracked locally on this device. Outcomes are updated as later candles become available.</div></div><div class="card wide"><div class="label">Confirmed entry signals</div><div id="signalSummary" class="muted">No confirmed signals yet. Signals appear only after a qualifying candle closes.</div><div class="signal-columns"><div><div class="label" style="margin-top:12px;color:var(--green)">BUY signals</div><div id="buySignals" class="signal-list"></div></div><div><div class="label" style="margin-top:12px;color:var(--red)">SELL signals</div><div id="sellSignals" class="signal-list"></div></div></div></div>
 </section><footer>Analysis and alerts only. No orders are placed. Technical levels are estimates from recent candles, not guaranteed support/resistance. Always confirm on Deriv MT5 or Deriv Trader and risk-manage independently.</footer></main>
 <script>
 (()=>{
 const ENDPOINT='wss://api.derivws.com/trading/v1/options/ws/public';
-let ws=null,seq=0,pending=new Map(),symbols=[],candlesByTf={},livePrice=null,alertOn=false,lastAlert='',activeTickSubscriptionId=null,activeTickSymbol=null,analysisRun=0,reconnectTimer=null,reconnectDelay=1500,manualClose=false,scanRunning=false,backgroundTimer=null,backgroundOn=false,notifiedSignals=new Set(),signalHistory=[],seenSignalKeys=new Set();
+let ws=null,seq=0,pending=new Map(),symbols=[],candlesByTf={},livePrice=null,alertOn=false,lastAlert='',activeTickSubscriptionId=null,activeTickSymbol=null,analysisRun=0,reconnectTimer=null,reconnectDelay=1500,manualClose=false,scanRunning=false,backgroundTimer=null,backgroundOn=false,notifiedSignals=new Set(),signalHistory=loadSignalHistory(),seenSignalKeys=new Set(signalHistory.map(s=>[s.symbol,s.side,s.tf,s.epoch].join('|')));
+function loadSignalHistory(){try{return JSON.parse(localStorage.getItem('volatilityAI.signalHistory')||'[]')}catch(e){return []}}
+function saveSignalHistory(){try{localStorage.setItem('volatilityAI.signalHistory',JSON.stringify(signalHistory.slice(0,200)))}catch(e){}}
 const $=id=>document.getElementById(id),fmt=n=>Number.isFinite(n)?n.toLocaleString(undefined,{maximumFractionDigits:5}):'—';
 function status(t,ok=false){$('status').textContent='● '+t;$('status').className='status'+(ok?' ok':'')}
 function diag(t){$('diagnostics').textContent=t}
@@ -127,8 +141,8 @@ function rsi(a,n=14){let up=0,dn=0;for(let i=a.length-n;i<a.length;i++){let d=a[
 function atr(cs,n=14){let x=[];for(let i=1;i<cs.length;i++)x.push(Math.max(cs[i].high-cs[i].low,Math.abs(cs[i].high-cs[i-1].close),Math.abs(cs[i].low-cs[i-1].close)));return x.slice(-n).reduce((a,b)=>a+b,0)/Math.min(n,x.length)}
 function levels(cs){const recent=cs.slice(-60),hi=Math.max(...recent.map(x=>x.high)),lo=Math.min(...recent.map(x=>x.low)),last=cs.at(-1).close,mid=(hi+lo+last)/3;return {r2:mid+(hi-lo),r1:2*mid-lo,p:mid,s1:2*mid-hi,s2:mid-(hi-lo),hi,lo}}
 function draw(cs){const c=$('chart'),ctx=c.getContext('2d'),w=c.clientWidth||700,h=260,dpr=devicePixelRatio||1;c.width=w*dpr;c.height=h*dpr;ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);const a=cs.slice(-65),min=Math.min(...a.map(x=>x.low)),max=Math.max(...a.map(x=>x.high)),pad=(max-min)*.08||1;const y=v=>h-16-(v-min+pad)/(max-min+2*pad)*(h-32),step=w/a.length;ctx.strokeStyle='#293955';ctx.lineWidth=1;for(let i=0;i<5;i++){let yy=16+i*(h-32)/4;ctx.beginPath();ctx.moveTo(0,yy);ctx.lineTo(w,yy);ctx.stroke()}a.forEach((x,i)=>{let xx=i*step+step/2;ctx.strokeStyle=x.close>=x.open?'#27c58b':'#ff657a';ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();ctx.moveTo(xx,y(x.high));ctx.lineTo(xx,y(x.low));ctx.stroke();let top=y(Math.max(x.open,x.close)),bot=y(Math.min(x.open,x.close));ctx.fillRect(xx-step*.28,top,step*.56,Math.max(1,bot-top))})}
-const SCAN_TFS=[900,1800,7200,10800,14400];
-const tfName=g=>({900:'15m',1800:'30m',7200:'2h',10800:'3h',14400:'4h'}[g]||g+'s');
+const SCAN_TFS=[60,300,900,1800,7200,10800,14400];
+const tfName=g=>({60:'1m',300:'5m',900:'15m',1800:'30m',7200:'2h',10800:'3h',14400:'4h'}[g]||g+'s');
 function structureStats(cs){
  if(!cs||cs.length<50)return {score:0,trend:'Insufficient data',detail:'Need at least 50 candles'};
  const a=cs.slice(-120), highs=[],lows=[];
@@ -180,68 +194,83 @@ function candleConfirmation(cs,granularity){
 function recordSignal(signal){
  const key=[signal.symbol,signal.side,signal.tf,signal.epoch].join('|');
  if(seenSignalKeys.has(key))return false;
- seenSignalKeys.add(key);signalHistory.unshift(signal);
- const cutoff=Math.floor(Date.now()/1000)-86400;
- signalHistory=signalHistory.filter(s=>s.epoch>=cutoff).slice(0,80);
- return true;
+ seenSignalKeys.add(key);signal.status='PENDING';signal.checkedThrough=signal.epoch;signal.createdAt=Date.now();
+ signalHistory.unshift(signal);signalHistory=signalHistory.slice(0,200);saveSignalHistory();return true;
+}
+function evaluatePendingSignals(symbol,tf,candles){
+ let changed=false;
+ for(const s of signalHistory){
+  if(s.status!=='PENDING'||s.symbol!==symbol||s.tf!==tf)continue;
+  const later=candles.filter(c=>c.epoch>s.epoch&&c.epoch>s.checkedThrough);
+  for(const c of later){
+   const stopHit=s.side==='BUY'?c.low<=s.stop:c.high>=s.stop;
+   const targetHit=s.side==='BUY'?c.high>=s.target:c.low<=s.target;
+   if(stopHit&&targetHit){s.status='LOSS';s.outcomeNote='Stop and target touched in same candle; counted conservatively as stop first.';s.closedAt=c.epoch;changed=true;break}
+   if(stopHit){s.status='LOSS';s.outcomeNote='Stop loss reached';s.closedAt=c.epoch;changed=true;break}
+   if(targetHit){s.status='WIN';s.outcomeNote='Target reached';s.closedAt=c.epoch;changed=true;break}
+   s.checkedThrough=c.epoch;
+  }
+ }
+ if(changed||signalHistory.length)saveSignalHistory();
 }
 async function scanAllMarkets(){
  if(scanRunning)return;
  if(!ws||ws.readyState!==1){diag('Connect to Deriv before scanning all markets.');status('Not connected');return}
  if(!symbols.length){await loadSymbols();if(!symbols.length)return}
  scanRunning=true;$('scanAll').disabled=true;$('analyze').disabled=true;
- const rows=[],signals=[],total=symbols.length*SCAN_TFS.length;let done=0,fail=0;
- $('scanSummary').textContent='Scanning '+symbols.length+' markets across five timeframes ('+total+' candle requests). Keep this tab open…';
- $('scanTable').innerHTML='';$('signalSummary').textContent='Checking every market for a closed-candle entry…';$('signalTable').innerHTML='';
- status('Scanning all markets…',true);
+ const rows=[],newSignals=[],total=symbols.length*SCAN_TFS.length;let done=0,fail=0;
+ $('scanSummary').textContent='Scanning '+symbols.length+' indices across 1m, 5m, 15m, 30m, 2h, 3h and 4h…';
+ $('scanTable').innerHTML='';status('Scanning all markets…',true);
  try{
   for(const market of symbols){
    const per=[];
    for(const tf of SCAN_TFS){
     if(!ws||ws.readyState!==1)throw Error('Deriv connection lost during scan. Reconnect and scan again.');
     try{
-     const candles=await getCandles(market.symbol,tf);
-     const st=structureStats(candles);
-     per.push({tf,name:tfName(tf),...st,candles});
+     const candles=await getCandles(market.symbol,tf);evaluatePendingSignals(market.symbol,tfName(tf),candles);
+     const st=structureStats(candles);per.push({tf,name:tfName(tf),...st,candles});
+     const confirm=candleConfirmation(candles,tf);
+     const aligned=(confirm.side==='BULLISH'&&st.trend==='Bullish structure')||(confirm.side==='BEARISH'&&st.trend==='Bearish structure');
+     if(st.score>=65&&aligned&&confirm.closed&&confirm.candle){
+      const last=confirm.candle,av=atr(candles),lv=levels(candles),side=confirm.side==='BULLISH'?'BUY':'SELL';
+      const entry=last.close,stop=side==='BUY'?Math.min(lv.s1,entry-1.5*av):Math.max(lv.r1,entry+1.5*av),risk=Math.abs(entry-stop),target=side==='BUY'?entry+2*risk:entry-2*risk;
+      const sig={name:market.display_name||market.symbol,symbol:market.symbol,side,tf:tfName(tf),score:st.score,pattern:confirm.pattern,entry,stop,target,epoch:last.epoch};
+      if(recordSignal(sig)){newSignals.push(sig)}
+     }
     }catch(e){fail++;per.push({tf,name:tfName(tf),score:0,trend:'Data unavailable',detail:e.message,candles:[]})}
-    done++;$('scanSummary').textContent='Scanning '+market.display_name+' · '+done+'/'+total+' requests complete · '+fail+' unavailable';
+    done++;$('scanSummary').textContent='Scanning '+market.display_name+' · '+done+'/'+total+' timeframe checks · '+fail+' unavailable';
    }
    const valid=per.filter(x=>x.trend!=='Data unavailable'&&x.trend!=='Insufficient data'&&x.candles.length>=55);
-   const best=valid.slice().sort((a,b)=>b.score-a.score)[0];
-   rows.push({name:market.display_name||market.symbol,symbol:market.symbol,best:best?best.name:'—',score:best?best.score:0,trend:best?best.trend:'Insufficient data',detail:best?best.detail:'',per});
-   if(best&&best.score>=65){
-    window.currentGranularity=best.tf;
-    const confirm=candleConfirmation(best.candles,best.tf);
-    const bullish=confirm.closed&&confirm.side==='BULLISH'&&best.trend==='Bullish structure';
-    const bearish=confirm.closed&&confirm.side==='BEARISH'&&best.trend==='Bearish structure';
-    if(bullish||bearish){
-     const side=bullish?'BUY':'SELL',closed=best.candles.filter(c=>c.epoch+best.tf<=Math.floor(Date.now()/1000)),last=closed.at(-1),av=atr(closed),lv=levels(closed);
-     const entry=last.close,stop=bullish?Math.min(lv.s1,entry-1.5*av):Math.max(lv.r1,entry+1.5*av),risk=Math.abs(entry-stop),target=bullish?entry+2*risk:entry-2*risk;
-     const sig={name:market.display_name||market.symbol,symbol:market.symbol,side,tf:best.name,score:best.score,pattern:confirm.pattern,entry,stop,target,epoch:last.epoch};signals.push(sig);recordSignal(sig);
-    }
-   }
+   const best=valid.slice().sort((x,y)=>y.score-x.score)[0];
+   rows.push({name:market.display_name||market.symbol,symbol:market.symbol,best:best?best.name:'—',score:best?best.score:0,trend:best?best.trend:'Insufficient data',per});
    renderScan(rows);
-   renderSignals(signals);
   }
-  const ranked=rows.slice().sort((a,b)=>b.score-a.score);
-  $('scanSummary').textContent='Scan complete: '+rows.length+' indices · '+fail+' timeframe requests unavailable. Best market = highest structure-quality score; this is a heuristic, not a prediction.';
-  renderScan(ranked);renderSignals(signals);status('Market scan complete',true);
-  diag('Scanned '+rows.length+' Volatility indices across 15m, 30m, 2h, 3h and 4h. Confirmed signals: '+signals.length+'.');
-  if(signals.length&&alertOn&&'Notification'in window&&Notification.permission==='granted'){
-   for(const s of signals){const key=s.symbol+'|'+s.side+'|'+s.tf+'|'+s.epoch;if(!notifiedSignals.has(key)){new Notification('Volatility AI · '+s.side,{body:s.name+' · '+s.tf+' · '+s.pattern+' · Entry '+fmt(s.entry)});notifiedSignals.add(key)}}
+  const ranked=rows.slice().sort((x,y)=>y.score-x.score);
+  $('scanSummary').textContent='Scan complete: '+rows.length+' markets · '+fail+' timeframe checks unavailable. Scores measure historical structure behaviour, not future certainty.';
+  renderScan(ranked);renderSignals();renderPerformance();status('Market scan complete',true);
+  diag('Scanned '+rows.length+' indices across seven timeframes. New signals: '+newSignals.length+'. Performance tracking updated from subsequent closed candles.');
+  if(alertOn&&'Notification'in window&&Notification.permission==='granted'){
+   for(const s of newSignals){const key=s.symbol+'|'+s.side+'|'+s.tf+'|'+s.epoch;if(!notifiedSignals.has(key)){new Notification('Volatility AI · '+s.side,{body:s.name+' · '+s.tf+' · '+s.pattern+' · Entry '+fmt(s.entry)});notifiedSignals.add(key)}}
   }
  }catch(e){$('scanSummary').textContent='Scan interrupted: '+e.message;status('Scan interrupted');diag(e.message)}
  finally{scanRunning=false;$('scanAll').disabled=false;$('analyze').disabled=false}
 }
 function renderScan(rows){
  const esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
- $('scanTable').innerHTML='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+['Market','Best TF','Structure score','Bias','All timeframes'].map(x=>'<th style="text-align:left;padding:9px;border-bottom:1px solid #263550;color:#9aa9c2">'+x+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr><td style="padding:9px;border-bottom:1px solid #263550">'+esc(r.name)+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+esc(r.best)+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+r.score+'/100</td><td style="padding:9px;border-bottom:1px solid #263550">'+esc(r.trend)+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+r.per.map(p=>esc(p.name)+': '+p.score).join(' · ')+'</td></tr>').join('')+'</tbody></table>';
+ $('scanTable').innerHTML='<div class="market-list">'+rows.slice().sort((a,b)=>b.score-a.score).map((r,i)=>'<div class="market-card"><div class="scoreline"><span>#'+(i+1)+' · '+esc(r.best)+'</span><b>'+r.score+'/100</b></div><div class="name">'+esc(r.name)+'</div><div class="scorebar"><span style="width:'+Math.max(0,Math.min(100,r.score))+'%"></span></div><div class="scoreline"><span>'+esc(r.trend)+'</span><span>Best timeframe: '+esc(r.best)+'</span></div><div class="small">'+r.per.map(p=>esc(p.name)+': '+(p.trend==='Data unavailable'?'—':p.score)).join(' · ')+'</div></div>').join('')+'</div>';
 }
-function renderSignals(signals){
- const esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
- const sorted=signals.slice().sort((a,b)=>b.score-a.score);
- $('signalSummary').textContent=sorted.length?sorted.length+' confirmed setup(s) found. Sorted by market-quality score. Re-scan for updates.':'No qualifying entry right now. The scanner will wait for a closed bullish/bearish candle that agrees with market structure.';
- $('signalTable').innerHTML=sorted.length?'<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+['Market','Signal','Timeframe','Quality','Confirmation','Entry','Stop loss','Target'].map(x=>'<th style="text-align:left;padding:9px;border-bottom:1px solid #263550;color:#9aa9c2">'+x+'</th>').join('')+'</tr></thead><tbody>'+sorted.map(s=>'<tr><td style="padding:9px;border-bottom:1px solid #263550">'+esc(s.name)+'</td><td style="padding:9px;border-bottom:1px solid #263550;color:'+(s.side==='BUY'?'#27c58b':'#ff657a')+';font-weight:800">'+s.side+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+s.tf+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+s.score+'/100</td><td style="padding:9px;border-bottom:1px solid #263550">'+esc(s.pattern)+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+fmt(s.entry)+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+fmt(s.stop)+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+fmt(s.target)+'</td></tr>').join('')+'</tbody></table>':'';
+function renderSignals(){
+ const pending=signalHistory.filter(s=>s.status==='PENDING').sort((a,b)=>b.score-a.score);
+ const buys=pending.filter(s=>s.side==='BUY'),sells=pending.filter(s=>s.side==='SELL');
+ $('signalSummary').textContent=pending.length?pending.length+' active confirmed setup(s) · '+signalHistory.filter(s=>s.status!=='PENDING').length+' resolved outcomes':'No active confirmed entries. Signals require a qualifying candle that has closed.';
+ const card=s=>'<div class="signal-card '+(s.side==='BUY'?'buy':'sell')+'"><div class="scoreline"><span>'+s.tf+' · Quality '+s.score+'/100</span><b>'+s.side+'</b></div><div class="name">'+s.name+'</div><div class="small">'+s.pattern+' · '+new Date(s.epoch*1000).toLocaleString()+'</div><div class="signal-price"><div>Entry<br><b>'+fmt(s.entry)+'</b></div><div>Stop loss<br><b>'+fmt(s.stop)+'</b></div><div>Target<br><b>'+fmt(s.target)+'</b></div><div>Tracking<br><b>'+s.status+'</b></div></div></div>';
+ $('buySignals').innerHTML=buys.map(card).join('')||'<div class="small">No active BUY setups.</div>';
+ $('sellSignals').innerHTML=sells.map(card).join('')||'<div class="small">No active SELL setups.</div>';
+}
+function renderPerformance(){
+ const done=signalHistory.filter(s=>s.status==='WIN'||s.status==='LOSS'),wins=done.filter(s=>s.status==='WIN').length,losses=done.length-wins,pending=signalHistory.filter(s=>s.status==='PENDING').length,rate=done.length?Math.round(wins/done.length*100):0;
+ $('performanceStats').innerHTML=[['Tracked',signalHistory.length],['Pending',pending],['Wins',wins],['Losses',losses],['Win rate',done.length?rate+'%':'—'],['Resolved',done.length],['BUY',signalHistory.filter(s=>s.side==='BUY').length],['SELL',signalHistory.filter(s=>s.side==='SELL').length]].map(x=>'<div class="stat"><span class="small">'+x[0]+'</span><b>'+x[1]+'</b></div>').join('');
+ $('performanceNote').textContent=done.length?'Win rate uses only resolved signals. Outcomes are checked against later closed candles; same-candle stop/target ambiguity is counted as a loss. This is historical tracking, not a verified backtest.':'No resolved signals yet. Keep the scanner running; outcomes will be measured against later closed candles.';
 }
 function toggleBackgroundScanner(){
  if(backgroundOn){clearInterval(backgroundTimer);backgroundTimer=null;backgroundOn=false;$('background').textContent='Start background scanner';$('scanSummary').textContent='Background scanning paused.';return}
@@ -292,6 +321,6 @@ async function analyze(){
  }catch(e){status('Analysis failed');diag(e.message)}finally{$('analyze').disabled=false}
 }
 $('connect').onclick=connect;$('analyze').onclick=analyze;$('scanAll').onclick=scanAllMarkets;$('background').onclick=toggleBackgroundScanner;$('market').onchange=async()=>{clearAnalysis();const sym=$('market').value;$('price').textContent='Switching to '+sym+'…';if(ws?.readyState===1){await subscribeTicks();if($('market').value===sym)await analyze()}else{$('price').textContent='Connect to load live price';}};$('style').onchange=()=>{if($('market').value)analyze()};$('alerts').onclick=async()=>{if(!('Notification'in window)){alert('Browser notifications are not supported.');return}const p=await Notification.requestPermission();alertOn=p==='granted';$('alerts').textContent=alertOn?'Alerts enabled':'Enable signal alerts'};
-window.addEventListener('resize',()=>{const g=tfSet();if(candlesByTf[g[0]])draw(candlesByTf[g[0]])});
+renderPerformance();renderSignals();window.addEventListener('resize',()=>{const g=tfSet();if(candlesByTf[g[0]])draw(candlesByTf[g[0]])});
 })();
 </script></body></html>
