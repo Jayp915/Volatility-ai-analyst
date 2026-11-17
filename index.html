@@ -7,7 +7,7 @@
 </style></head><body>
 <header><div><h1>VOLATILITY <span>AI</span></h1><div class="sub">TOP-DOWN DERIV TRADING ANALYST · V2.0</div></div><div id="status" class="status">● Not connected</div></header>
 <main><section class="controls"><select id="market"><option>Connect to load Volatility Indices</option></select><select id="style"><option value="scalp">Scalping · 1m / 5m / 15m</option><option value="intraday">Intraday · 15m / 1h / 4h</option></select></section>
-<div class="actions"><button id="connect" class="primary">Connect live data</button><button id="analyze">Analyze market</button><button id="alerts">Enable signal alerts</button></div>
+<div class="actions"><button id="connect" class="primary">Connect live data</button><button id="analyze">Analyze selected</button><button id="scanAll" class="primary">Scan all markets</button><button id="alerts">Enable signal alerts</button></div>
 <section class="grid">
 <div class="card"><div class="label">Selected market / live price</div><div id="symbol" class="big">—</div><div id="price" class="muted">Waiting for connection</div></div>
 <div class="card"><div class="label">Analyst decision</div><div id="decision" class="decision amber">NO DATA</div><div id="confidence" class="muted">Connect to load candles</div></div>
@@ -18,16 +18,16 @@
 <div class="card"><div class="label">Entry plan</div><div class="big" id="entry">—</div><div class="muted" id="entrynote">—</div></div>
 <div class="card"><div class="label">Stop loss / take profit</div><div class="big" id="stop">—</div><div class="muted" id="target">—</div></div>
 <div class="card wide"><div class="label">Why this decision?</div><div id="reasons" class="muted">No analysis yet.</div></div>
-<div class="card wide"><div class="label">Connection diagnostics</div><div id="diagnostics" class="muted">WebSocket not started.</div></div>
+<div class="card wide"><div class="label">Connection diagnostics</div><div id="diagnostics" class="muted">WebSocket not started.</div></div><div class="card wide"><div class="label">All-market structure scanner</div><div id="scanSummary" class="muted">Press “Scan all markets” to rank every discovered Volatility Index across 15m, 30m, 2h, 3h and 4h.</div><div id="scanTable" style="overflow-x:auto;margin-top:12px"></div></div>
 </section><footer>Analysis and alerts only. No orders are placed. Technical levels are estimates from recent candles, not guaranteed support/resistance. Always confirm on Deriv MT5 or Deriv Trader and risk-manage independently.</footer></main>
 <script>
 (()=>{
 const ENDPOINT='wss://api.derivws.com/trading/v1/options/ws/public';
-let ws=null,seq=0,pending=new Map(),symbols=[],candlesByTf={},livePrice=null,alertOn=false,lastAlert='',activeTickSubscriptionId=null,activeTickSymbol=null,analysisRun=0;
+let ws=null,seq=0,pending=new Map(),symbols=[],candlesByTf={},livePrice=null,alertOn=false,lastAlert='',activeTickSubscriptionId=null,activeTickSymbol=null,analysisRun=0,reconnectTimer=null,reconnectDelay=1500,manualClose=false,scanRunning=false;
 const $=id=>document.getElementById(id),fmt=n=>Number.isFinite(n)?n.toLocaleString(undefined,{maximumFractionDigits:5}):'—';
 function status(t,ok=false){$('status').textContent='● '+t;$('status').className='status'+(ok?' ok':'')}
 function diag(t){$('diagnostics').textContent=t}
-function request(payload,timeout=12000){return new Promise((resolve,reject)=>{if(!ws||ws.readyState!==1)return reject(Error('WebSocket is not open'));const id=++seq;pending.set(id,{resolve,reject});payload.req_id=id;ws.send(JSON.stringify(payload));setTimeout(()=>{if(pending.has(id)){pending.delete(id);reject(Error('Request timed out: '+Object.keys(payload).filter(k=>k!=='req_id').join(',')))}},timeout)})}
+function request(payload,timeout=18000){return new Promise((resolve,reject)=>{if(!ws||ws.readyState!==1)return reject(Error('WebSocket is not open'));const id=++seq;const timer=setTimeout(()=>{if(pending.has(id)){pending.delete(id);reject(Error('Request timed out: '+Object.keys(payload).filter(k=>k!=='req_id').join(',')))}},timeout);pending.set(id,{resolve:d=>{clearTimeout(timer);resolve(d)},reject:e=>{clearTimeout(timer);reject(e)}});payload.req_id=id;try{ws.send(JSON.stringify(payload))}catch(e){clearTimeout(timer);pending.delete(id);reject(e)}})}
 function showTick(tick){
  if(!tick)return;
  const selected=$('market').value;
@@ -50,11 +50,12 @@ function clearAnalysis(){
  $('rr').textContent='—';$('symbol').textContent=$('market').selectedOptions[0]?.textContent||'—';
 }
 function connect(){
+ manualClose=false;if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null;}
  if(ws&&ws.readyState===1){loadSymbols();return}
  status('Connecting…');diag('Opening secure WebSocket: '+ENDPOINT);
  try{ws=new WebSocket(ENDPOINT)}catch(e){status('Browser blocked WebSocket');diag(e.message);return}
  const timer=setTimeout(()=>{if(ws&&ws.readyState!==1){status('Connection timeout');diag('No WebSocket handshake within 15 seconds. Try another network or disable VPN/ad-blocking temporarily.')}},15000);
- ws.onopen=async()=>{clearTimeout(timer);status('Connected · loading symbols',true);diag('WebSocket handshake successful. Requesting active_symbols…');try{await loadSymbols()}catch(e){status('Symbol request failed');diag(e.message)}};
+ ws.onopen=async()=>{clearTimeout(timer);reconnectDelay=1500;status('Connected · loading symbols',true);diag('WebSocket handshake successful. Requesting active_symbols…');try{await loadSymbols()}catch(e){status('Symbol request failed');diag(e.message)};};
  ws.onmessage=ev=>{let d;try{d=JSON.parse(ev.data)}catch{return}
  if(d.msg_type==='tick'&&d.tick){
    const sid=d.subscription?.id;
@@ -64,7 +65,7 @@ function connect(){
  if(d.msg_type==='history'&&d.history?.prices?.length){const n=d.history.prices.length-1;showTick({quote:d.history.prices[n],epoch:d.history.times?.[n]})}
  };
  ws.onerror=()=>{status('WebSocket error');diag('Browser reported a WebSocket handshake/network error. This occurs before Deriv can return a market-data response. Check network restrictions, VPN, Private DNS or browser extensions.')};
- ws.onclose=e=>{clearTimeout(timer);status('Disconnected');diag('Socket closed · code '+e.code+' · '+(e.reason||'no reason supplied'));for(const p of pending.values())p.reject(Error('Socket closed'));pending.clear()};
+ ws.onclose=e=>{clearTimeout(timer);activeTickSubscriptionId=null;for(const p of pending.values())p.reject(Error('Socket closed'));pending.clear();if(!manualClose){status('Disconnected · reconnecting');diag('Connection lost (code '+e.code+'). Reconnecting automatically…');if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{if(!manualClose)connect()},reconnectDelay);reconnectDelay=Math.min(30000,reconnectDelay*2)}else{status('Disconnected');diag('Socket closed.')}};
 }
 async function loadSymbols(){
  // The current Deriv public API renamed symbol/display_name to
@@ -126,6 +127,57 @@ function rsi(a,n=14){let up=0,dn=0;for(let i=a.length-n;i<a.length;i++){let d=a[
 function atr(cs,n=14){let x=[];for(let i=1;i<cs.length;i++)x.push(Math.max(cs[i].high-cs[i].low,Math.abs(cs[i].high-cs[i-1].close),Math.abs(cs[i].low-cs[i-1].close)));return x.slice(-n).reduce((a,b)=>a+b,0)/Math.min(n,x.length)}
 function levels(cs){const recent=cs.slice(-60),hi=Math.max(...recent.map(x=>x.high)),lo=Math.min(...recent.map(x=>x.low)),last=cs.at(-1).close,mid=(hi+lo+last)/3;return {r2:mid+(hi-lo),r1:2*mid-lo,p:mid,s1:2*mid-hi,s2:mid-(hi-lo),hi,lo}}
 function draw(cs){const c=$('chart'),ctx=c.getContext('2d'),w=c.clientWidth||700,h=260,dpr=devicePixelRatio||1;c.width=w*dpr;c.height=h*dpr;ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);const a=cs.slice(-65),min=Math.min(...a.map(x=>x.low)),max=Math.max(...a.map(x=>x.high)),pad=(max-min)*.08||1;const y=v=>h-16-(v-min+pad)/(max-min+2*pad)*(h-32),step=w/a.length;ctx.strokeStyle='#293955';ctx.lineWidth=1;for(let i=0;i<5;i++){let yy=16+i*(h-32)/4;ctx.beginPath();ctx.moveTo(0,yy);ctx.lineTo(w,yy);ctx.stroke()}a.forEach((x,i)=>{let xx=i*step+step/2;ctx.strokeStyle=x.close>=x.open?'#27c58b':'#ff657a';ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();ctx.moveTo(xx,y(x.high));ctx.lineTo(xx,y(x.low));ctx.stroke();let top=y(Math.max(x.open,x.close)),bot=y(Math.min(x.open,x.close));ctx.fillRect(xx-step*.28,top,step*.56,Math.max(1,bot-top))})}
+const SCAN_TFS=[900,1800,7200,10800,14400];
+const tfName=g=>({900:'15m',1800:'30m',7200:'2h',10800:'3h',14400:'4h'}[g]||g+'s');
+function structureStats(cs){
+ if(!cs||cs.length<45)return {score:0,trend:'Insufficient data',detail:'Not enough candles'};
+ const a=cs.slice(-90), highs=[],lows=[];
+ for(let i=2;i<a.length-2;i++){
+  if(a[i].high>a[i-1].high&&a[i].high>a[i-2].high&&a[i].high>=a[i+1].high&&a[i].high>=a[i+2].high)highs.push({i,p:a[i].high});
+  if(a[i].low<a[i-1].low&&a[i].low<a[i-2].low&&a[i].low<=a[i+1].low&&a[i].low<=a[i+2].low)lows.push({i,p:a[i].low});
+ }
+ const hh=highs.slice(-3),ll=lows.slice(-3);let up=0,down=0;
+ if(hh.length>=2){if(hh.at(-1).p>hh.at(-2).p)up++;else if(hh.at(-1).p<hh.at(-2).p)down++}
+ if(ll.length>=2){if(ll.at(-1).p>ll.at(-2).p)up++;else if(ll.at(-1).p<ll.at(-2).p)down++}
+ const close=a.at(-1).close,range=Math.max(...a.slice(-30).map(x=>x.high))-Math.min(...a.slice(-30).map(x=>x.low));
+ const atrv=atr(a),noise=atrv?range/(atrv*Math.sqrt(30)):0;
+ const aligned=up===2||down===2,score=Math.round((aligned?55:(up||down?35:15))+(noise>1.8?20:noise>1.2?12:0)+(hh.length>=2&&ll.length>=2?10:0));
+ return {score:Math.min(100,score),trend:up>down?'Bullish structure':down>up?'Bearish structure':'Mixed / ranging',detail:'Swing highs '+(hh.length>=2?(hh.at(-1).p>hh.at(-2).p?'HH':'LH'):'n/a')+' · swing lows '+(ll.length>=2?(ll.at(-1).p>ll.at(-2).p?'HL':'LL'):'n/a'),last:close,levels:levels(a)};
+}
+async function scanAllMarkets(){
+ if(scanRunning)return;if(!ws||ws.readyState!==1){diag('Connect to Deriv before scanning all markets.');status('Not connected');return}
+ if(!symbols.length){await loadSymbols();if(!symbols.length)return}
+ scanRunning=true;$('scanAll').disabled=true;$('analyze').disabled=true;
+ const rows=[],total=symbols.length*SCAN_TFS.length;let done=0,fail=0;
+ $('scanSummary').textContent='Scanning '+symbols.length+' markets across five timeframes ('+total+' candle requests). Keep this tab open…';
+ $('scanTable').innerHTML='';status('Scanning all markets…',true);
+ try{
+  for(const market of symbols){
+   const per=[];
+   for(const tf of SCAN_TFS){
+    if(!ws||ws.readyState!==1)throw Error('Deriv connection lost during scan. Reconnect and scan again.');
+    try{
+     const candles=await getCandles(market.symbol,tf);
+     const st=structureStats(candles);
+     per.push({tf,name:tfName(tf),...st});
+    }catch(e){fail++;per.push({tf,name:tfName(tf),score:0,trend:'Data unavailable',detail:e.message})}
+    done++;$('scanSummary').textContent='Scanning '+market.display_name+' · '+done+'/'+total+' requests complete · '+fail+' unavailable';
+   }
+   const valid=per.filter(x=>x.trend!=='Data unavailable'&&x.trend!=='Insufficient data');
+   const best=valid.slice().sort((a,b)=>b.score-a.score)[0];
+   rows.push({name:market.display_name||market.symbol,symbol:market.symbol,best:best?best.name:'—',score:best?best.score:0,trend:best?best.trend:'Insufficient data',detail:best?best.detail:'',per});
+   renderScan(rows);
+  }
+  const ranked=rows.slice().sort((a,b)=>b.score-a.score);
+  $('scanSummary').textContent='Scan complete: '+rows.length+' indices · '+fail+' timeframe requests unavailable. Rankings are based on recent swing structure, not a guarantee of future behaviour.';
+  renderScan(ranked);status('Market scan complete',true);diag('Scanned '+rows.length+' Volatility indices across 15m, 30m, 2h, 3h and 4h.');
+ }catch(e){$('scanSummary').textContent='Scan interrupted: '+e.message;status('Scan interrupted');diag(e.message)}
+ finally{scanRunning=false;$('scanAll').disabled=false;$('analyze').disabled=false}
+}
+function renderScan(rows){
+ const esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+ $('scanTable').innerHTML='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+['Market','Best TF','Structure score','Bias','All timeframes'].map(x=>'<th style="text-align:left;padding:9px;border-bottom:1px solid #263550;color:#9aa9c2">'+x+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr><td style="padding:9px;border-bottom:1px solid #263550">'+esc(r.name)+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+esc(r.best)+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+r.score+'/100</td><td style="padding:9px;border-bottom:1px solid #263550">'+esc(r.trend)+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+r.per.map(p=>esc(p.name)+': '+p.score).join(' · ')+'</td></tr>').join('')+'</tbody></table>';
+}
 async function analyze(){
  const sym=$('market').value;if(!sym){diag('Choose a market after connecting.');return}
  const run=++analysisRun;$('analyze').disabled=true;status('Fetching top-down candles for '+sym+'…');
@@ -154,7 +206,7 @@ async function analyze(){
  if(alertOn&&decision!=='WAIT'&&decision!==lastAlert){if('Notification'in window&&Notification.permission==='granted')new Notification('Volatility AI: '+decision,{body:sym+' · Price '+fmt(last)});lastAlert=decision}
  }catch(e){status('Analysis failed');diag(e.message)}finally{$('analyze').disabled=false}
 }
-$('connect').onclick=connect;$('analyze').onclick=analyze;$('market').onchange=async()=>{clearAnalysis();const sym=$('market').value;$('price').textContent='Switching to '+sym+'…';if(ws?.readyState===1){await subscribeTicks();if($('market').value===sym)await analyze()}else{$('price').textContent='Connect to load live price';}};$('style').onchange=()=>{if($('market').value)analyze()};$('alerts').onclick=async()=>{if(!('Notification'in window)){alert('Browser notifications are not supported.');return}const p=await Notification.requestPermission();alertOn=p==='granted';$('alerts').textContent=alertOn?'Alerts enabled':'Enable signal alerts'};
+$('connect').onclick=connect;$('analyze').onclick=analyze;$('scanAll').onclick=scanAllMarkets;$('market').onchange=async()=>{clearAnalysis();const sym=$('market').value;$('price').textContent='Switching to '+sym+'…';if(ws?.readyState===1){await subscribeTicks();if($('market').value===sym)await analyze()}else{$('price').textContent='Connect to load live price';}};$('style').onchange=()=>{if($('market').value)analyze()};$('alerts').onclick=async()=>{if(!('Notification'in window)){alert('Browser notifications are not supported.');return}const p=await Notification.requestPermission();alertOn=p==='granted';$('alerts').textContent=alertOn?'Alerts enabled':'Enable signal alerts'};
 window.addEventListener('resize',()=>{const g=tfSet();if(candlesByTf[g[0]])draw(candlesByTf[g[0]])});
 })();
 </script></body></html>
