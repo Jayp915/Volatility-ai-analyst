@@ -23,7 +23,7 @@
 <script>
 (()=>{
 const ENDPOINT='wss://api.derivws.com/trading/v1/options/ws/public';
-let ws=null,seq=0,pending=new Map(),symbols=[],candlesByTf={},livePrice=null,alertOn=false,lastAlert='',activeTickSubscriptionId=null,activeTickSymbol=null,analysisRun=0,reconnectTimer=null,reconnectDelay=1500,manualClose=false,scanRunning=false,backgroundTimer=null,backgroundOn=false,notifiedSignals=new Set();
+let ws=null,seq=0,pending=new Map(),symbols=[],candlesByTf={},livePrice=null,alertOn=false,lastAlert='',activeTickSubscriptionId=null,activeTickSymbol=null,analysisRun=0,reconnectTimer=null,reconnectDelay=1500,manualClose=false,scanRunning=false,backgroundTimer=null,backgroundOn=false,notifiedSignals=new Set(),signalHistory=[],seenSignalKeys=new Set();
 const $=id=>document.getElementById(id),fmt=n=>Number.isFinite(n)?n.toLocaleString(undefined,{maximumFractionDigits:5}):'—';
 function status(t,ok=false){$('status').textContent='● '+t;$('status').className='status'+(ok?' ok':'')}
 function diag(t){$('diagnostics').textContent=t}
@@ -121,7 +121,7 @@ async function subscribeTicks(){
  }
 }
 function tfSet(){return $('style').value==='scalp'?[60,300,900]:[900,3600,14400]}
-async function getCandles(sym,granularity){const d=await request({ticks_history:sym,count:180,end:'latest',style:'candles',granularity});return (d.candles||[]).map(c=>({epoch:+c.epoch,open:+c.open,high:+c.high,low:+c.low,close:+c.close})).filter(c=>[c.open,c.high,c.low,c.close].every(Number.isFinite))}
+async function getCandles(sym,granularity){const d=await request({ticks_history:sym,count:180,end:'latest',style:'candles',granularity});const now=Math.floor(Date.now()/1000);return (d.candles||[]).map(c=>({epoch:+c.epoch,open:+c.open,high:+c.high,low:+c.low,close:+c.close})).filter(c=>[c.epoch,c.open,c.high,c.low,c.close].every(Number.isFinite)&&c.epoch+granularity<=now)}
 function ema(a,n){let k=2/(n+1),v=a[0];for(let i=1;i<a.length;i++)v=a[i]*k+v*(1-k);return v}
 function rsi(a,n=14){let up=0,dn=0;for(let i=a.length-n;i<a.length;i++){let d=a[i]-a[i-1];if(d>0)up+=d;else dn-=d}if(dn===0)return 100;return 100-100/(1+up/dn)}
 function atr(cs,n=14){let x=[];for(let i=1;i<cs.length;i++)x.push(Math.max(cs[i].high-cs[i].low,Math.abs(cs[i].high-cs[i-1].close),Math.abs(cs[i].low-cs[i-1].close)));return x.slice(-n).reduce((a,b)=>a+b,0)/Math.min(n,x.length)}
@@ -162,10 +162,10 @@ function structureStats(cs){
  const up=hh+hl,down=lh+ll,trend=up>down?'Bullish structure':down>up?'Bearish structure':'Mixed / ranging';
  return {score,trend,detail:'S/R touches '+touches+' · swing sequence '+(up+down)+' · breakout retests '+retests+'/'+breaks+' · false-break rate '+Math.round(falseRate*100)+'%',last:last.close,levels:levels(a),metrics:{touches,swings:Math.round(swings),breakQuality:Math.round(breakQuality),falseBreakRate:Math.round(falseRate*100)}};
 }
-function candleConfirmation(cs){
- if(!cs||cs.length<4)return {side:'NONE',pattern:'Insufficient candles',closed:false};
- const now=Math.floor(Date.now()/1000),closed=cs.filter(c=>c.epoch+Number(window.currentGranularity||0)<=now);
- const a=closed.length>=2?closed:cs.slice(0,-1);if(a.length<2)return {side:'NONE',pattern:'Waiting for candle close',closed:false};
+function candleConfirmation(cs,granularity){
+ if(!cs||cs.length<3)return {side:'NONE',pattern:'Insufficient fully closed candles',closed:false};
+ const now=Math.floor(Date.now()/1000),a=cs.filter(c=>c.epoch+Number(granularity||0)<=now);
+ if(a.length<2)return {side:'NONE',pattern:'Waiting for a fully closed candle',closed:false};
  const p=a.at(-2),c=a.at(-1),range=Math.max(c.high-c.low,1e-12),body=Math.abs(c.close-c.open),upper=c.high-Math.max(c.open,c.close),lower=Math.min(c.open,c.close)-c.low;
  const bullEngulf=c.close>c.open&&p.close<p.open&&c.open<=p.close&&c.close>=p.open;
  const bearEngulf=c.close<c.open&&p.close>p.open&&c.open>=p.close&&c.close<=p.open;
@@ -176,6 +176,14 @@ function candleConfirmation(cs){
  if(bullEngulf||bullPin||strongBull)return {side:'BULLISH',pattern:bullEngulf?'Bullish engulfing':bullPin?'Bullish rejection pin bar':'Strong bullish close',closed:true,candle:c};
  if(bearEngulf||bearPin||strongBear)return {side:'BEARISH',pattern:bearEngulf?'Bearish engulfing':bearPin?'Bearish rejection pin bar':'Strong bearish close',closed:true,candle:c};
  return {side:'NONE',pattern:'No qualifying closed confirmation candle',closed:true,candle:c};
+}
+function recordSignal(signal){
+ const key=[signal.symbol,signal.side,signal.tf,signal.epoch].join('|');
+ if(seenSignalKeys.has(key))return false;
+ seenSignalKeys.add(key);signalHistory.unshift(signal);
+ const cutoff=Math.floor(Date.now()/1000)-86400;
+ signalHistory=signalHistory.filter(s=>s.epoch>=cutoff).slice(0,80);
+ return true;
 }
 async function scanAllMarkets(){
  if(scanRunning)return;
@@ -203,13 +211,13 @@ async function scanAllMarkets(){
    rows.push({name:market.display_name||market.symbol,symbol:market.symbol,best:best?best.name:'—',score:best?best.score:0,trend:best?best.trend:'Insufficient data',detail:best?best.detail:'',per});
    if(best&&best.score>=65){
     window.currentGranularity=best.tf;
-    const confirm=candleConfirmation(best.candles);
+    const confirm=candleConfirmation(best.candles,best.tf);
     const bullish=confirm.closed&&confirm.side==='BULLISH'&&best.trend==='Bullish structure';
     const bearish=confirm.closed&&confirm.side==='BEARISH'&&best.trend==='Bearish structure';
     if(bullish||bearish){
      const side=bullish?'BUY':'SELL',closed=best.candles.filter(c=>c.epoch+best.tf<=Math.floor(Date.now()/1000)),last=closed.at(-1),av=atr(closed),lv=levels(closed);
      const entry=last.close,stop=bullish?Math.min(lv.s1,entry-1.5*av):Math.max(lv.r1,entry+1.5*av),risk=Math.abs(entry-stop),target=bullish?entry+2*risk:entry-2*risk;
-     signals.push({name:market.display_name||market.symbol,symbol:market.symbol,side,tf:best.name,score:best.score,pattern:confirm.pattern,entry,stop,target,epoch:last.epoch});
+     const sig={name:market.display_name||market.symbol,symbol:market.symbol,side,tf:best.name,score:best.score,pattern:confirm.pattern,entry,stop,target,epoch:last.epoch};signals.push(sig);recordSignal(sig);
     }
    }
    renderScan(rows);
@@ -256,7 +264,7 @@ async function analyze(){
  const bias=eh>ema(hc.slice(-50),50)?'BULLISH':eh<ema(hc.slice(-50),50)?'BEARISH':'NEUTRAL';
  const midBias=em>ema(mc.slice(-50),50)?'BULLISH':em<ema(mc.slice(-50),50)?'BEARISH':'NEUTRAL';
  const fastBias=ef>es?'BULLISH':ef<es?'BEARISH':'NEUTRAL';
- window.currentGranularity=gs[0];const confirm=candleConfirmation(fast),st=structureStats(fast);
+ const confirm=candleConfirmation(fast,gs[0]),st=structureStats(fast);
  const nearRes=(lv.r1-last)<av*.45&&(lv.r1-last)>=0,nearSup=(last-lv.s1)<av*.45&&(last-lv.s1)>=0;
  const long=confirm.side==='BULLISH'&&bias==='BULLISH'&&midBias!=='BEARISH'&&fastBias==='BULLISH'&&!nearRes&&rv<75;
  const short=confirm.side==='BEARISH'&&bias==='BEARISH'&&midBias!=='BULLISH'&&fastBias==='BEARISH'&&!nearSup&&rv>25;
