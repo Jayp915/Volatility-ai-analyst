@@ -7,7 +7,7 @@
 </style></head><body>
 <header><div><h1>VOLATILITY <span>AI</span></h1><div class="sub">MARKET QUALITY + CLOSED-CANDLE ANALYST · V3.0</div></div><div id="status" class="status">● Not connected</div></header>
 <main><section class="controls"><select id="market"><option>Connect to load Volatility Indices</option></select><select id="style"><option value="scalp">Scalping · 1m / 5m / 15m</option><option value="intraday">Intraday · 15m / 1h / 4h</option></select></section>
-<div class="actions"><button id="connect" class="primary">Connect live data</button><button id="analyze">Analyze selected</button><button id="scanAll" class="primary">Scan all markets</button><button id="alerts">Enable signal alerts</button></div>
+<div class="actions"><button id="connect" class="primary">Connect live data</button><button id="analyze">Analyze selected</button><button id="scanAll" class="primary">Scan all markets</button><button id="alerts">Enable signal alerts</button><button id="background">Start background scanner</button></div>
 <section class="grid">
 <div class="card"><div class="label">Selected market / live price</div><div id="symbol" class="big">—</div><div id="price" class="muted">Waiting for connection</div></div>
 <div class="card"><div class="label">Analyst decision</div><div id="decision" class="decision amber">NO DATA</div><div id="confidence" class="muted">Connect to load candles</div></div>
@@ -18,12 +18,12 @@
 <div class="card"><div class="label">Entry plan</div><div class="big" id="entry">—</div><div class="muted" id="entrynote">—</div></div>
 <div class="card"><div class="label">Stop loss / take profit</div><div class="big" id="stop">—</div><div class="muted" id="target">—</div></div>
 <div class="card wide"><div class="label">Why this decision?</div><div id="reasons" class="muted">No analysis yet.</div></div>
-<div class="card wide"><div class="label">Connection diagnostics</div><div id="diagnostics" class="muted">WebSocket not started.</div></div><div class="card wide"><div class="label">All-market structure scanner</div><div id="scanSummary" class="muted">Press “Scan all markets” to rank every discovered Volatility Index across 15m, 30m, 2h, 3h and 4h.</div><div id="scanTable" style="overflow-x:auto;margin-top:12px"></div></div>
+<div class="card wide"><div class="label">Connection diagnostics</div><div id="diagnostics" class="muted">WebSocket not started.</div></div><div class="card wide"><div class="label">All-market structure scanner</div><div id="scanSummary" class="muted">Press “Scan all markets” to rank every discovered Volatility Index across 15m, 30m, 2h, 3h and 4h.</div><div id="scanTable" style="overflow-x:auto;margin-top:12px"></div></div><div class="card wide"><div class="label">Confirmed entry signals</div><div id="signalSummary" class="muted">No confirmed signals yet. Signals appear only after a qualifying candle closes.</div><div id="signalTable" style="overflow-x:auto;margin-top:12px"></div></div>
 </section><footer>Analysis and alerts only. No orders are placed. Technical levels are estimates from recent candles, not guaranteed support/resistance. Always confirm on Deriv MT5 or Deriv Trader and risk-manage independently.</footer></main>
 <script>
 (()=>{
 const ENDPOINT='wss://api.derivws.com/trading/v1/options/ws/public';
-let ws=null,seq=0,pending=new Map(),symbols=[],candlesByTf={},livePrice=null,alertOn=false,lastAlert='',activeTickSubscriptionId=null,activeTickSymbol=null,analysisRun=0,reconnectTimer=null,reconnectDelay=1500,manualClose=false,scanRunning=false;
+let ws=null,seq=0,pending=new Map(),symbols=[],candlesByTf={},livePrice=null,alertOn=false,lastAlert='',activeTickSubscriptionId=null,activeTickSymbol=null,analysisRun=0,reconnectTimer=null,reconnectDelay=1500,manualClose=false,scanRunning=false,backgroundTimer=null,backgroundOn=false,notifiedSignals=new Set();
 const $=id=>document.getElementById(id),fmt=n=>Number.isFinite(n)?n.toLocaleString(undefined,{maximumFractionDigits:5}):'—';
 function status(t,ok=false){$('status').textContent='● '+t;$('status').className='status'+(ok?' ok':'')}
 function diag(t){$('diagnostics').textContent=t}
@@ -178,12 +178,14 @@ function candleConfirmation(cs){
  return {side:'NONE',pattern:'No qualifying closed confirmation candle',closed:true,candle:c};
 }
 async function scanAllMarkets(){
- if(scanRunning)return;if(!ws||ws.readyState!==1){diag('Connect to Deriv before scanning all markets.');status('Not connected');return}
+ if(scanRunning)return;
+ if(!ws||ws.readyState!==1){diag('Connect to Deriv before scanning all markets.');status('Not connected');return}
  if(!symbols.length){await loadSymbols();if(!symbols.length)return}
  scanRunning=true;$('scanAll').disabled=true;$('analyze').disabled=true;
- const rows=[],total=symbols.length*SCAN_TFS.length;let done=0,fail=0;
+ const rows=[],signals=[],total=symbols.length*SCAN_TFS.length;let done=0,fail=0;
  $('scanSummary').textContent='Scanning '+symbols.length+' markets across five timeframes ('+total+' candle requests). Keep this tab open…';
- $('scanTable').innerHTML='';status('Scanning all markets…',true);
+ $('scanTable').innerHTML='';$('signalSummary').textContent='Checking every market for a closed-candle entry…';$('signalTable').innerHTML='';
+ status('Scanning all markets…',true);
  try{
   for(const market of symbols){
    const per=[];
@@ -192,24 +194,53 @@ async function scanAllMarkets(){
     try{
      const candles=await getCandles(market.symbol,tf);
      const st=structureStats(candles);
-     per.push({tf,name:tfName(tf),...st});
-    }catch(e){fail++;per.push({tf,name:tfName(tf),score:0,trend:'Data unavailable',detail:e.message})}
+     per.push({tf,name:tfName(tf),...st,candles});
+    }catch(e){fail++;per.push({tf,name:tfName(tf),score:0,trend:'Data unavailable',detail:e.message,candles:[]})}
     done++;$('scanSummary').textContent='Scanning '+market.display_name+' · '+done+'/'+total+' requests complete · '+fail+' unavailable';
    }
-   const valid=per.filter(x=>x.trend!=='Data unavailable'&&x.trend!=='Insufficient data');
+   const valid=per.filter(x=>x.trend!=='Data unavailable'&&x.trend!=='Insufficient data'&&x.candles.length>=55);
    const best=valid.slice().sort((a,b)=>b.score-a.score)[0];
    rows.push({name:market.display_name||market.symbol,symbol:market.symbol,best:best?best.name:'—',score:best?best.score:0,trend:best?best.trend:'Insufficient data',detail:best?best.detail:'',per});
+   if(best&&best.score>=65){
+    window.currentGranularity=best.tf;
+    const confirm=candleConfirmation(best.candles);
+    const bullish=confirm.closed&&confirm.side==='BULLISH'&&best.trend==='Bullish structure';
+    const bearish=confirm.closed&&confirm.side==='BEARISH'&&best.trend==='Bearish structure';
+    if(bullish||bearish){
+     const side=bullish?'BUY':'SELL',closed=best.candles.filter(c=>c.epoch+best.tf<=Math.floor(Date.now()/1000)),last=closed.at(-1),av=atr(closed),lv=levels(closed);
+     const entry=last.close,stop=bullish?Math.min(lv.s1,entry-1.5*av):Math.max(lv.r1,entry+1.5*av),risk=Math.abs(entry-stop),target=bullish?entry+2*risk:entry-2*risk;
+     signals.push({name:market.display_name||market.symbol,symbol:market.symbol,side,tf:best.name,score:best.score,pattern:confirm.pattern,entry,stop,target,epoch:last.epoch});
+    }
+   }
    renderScan(rows);
+   renderSignals(signals);
   }
   const ranked=rows.slice().sort((a,b)=>b.score-a.score);
-  $('scanSummary').textContent='Scan complete: '+rows.length+' indices · '+fail+' timeframe requests unavailable. Rankings are based on recent swing structure, not a guarantee of future behaviour.';
-  renderScan(ranked);status('Market scan complete',true);diag('Scanned '+rows.length+' Volatility indices across 15m, 30m, 2h, 3h and 4h.');
+  $('scanSummary').textContent='Scan complete: '+rows.length+' indices · '+fail+' timeframe requests unavailable. Best market = highest structure-quality score; this is a heuristic, not a prediction.';
+  renderScan(ranked);renderSignals(signals);status('Market scan complete',true);
+  diag('Scanned '+rows.length+' Volatility indices across 15m, 30m, 2h, 3h and 4h. Confirmed signals: '+signals.length+'.');
+  if(signals.length&&alertOn&&'Notification'in window&&Notification.permission==='granted'){
+   for(const s of signals){const key=s.symbol+'|'+s.side+'|'+s.tf+'|'+s.epoch;if(!notifiedSignals.has(key)){new Notification('Volatility AI · '+s.side,{body:s.name+' · '+s.tf+' · '+s.pattern+' · Entry '+fmt(s.entry)});notifiedSignals.add(key)}}
+  }
  }catch(e){$('scanSummary').textContent='Scan interrupted: '+e.message;status('Scan interrupted');diag(e.message)}
  finally{scanRunning=false;$('scanAll').disabled=false;$('analyze').disabled=false}
 }
 function renderScan(rows){
  const esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
  $('scanTable').innerHTML='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+['Market','Best TF','Structure score','Bias','All timeframes'].map(x=>'<th style="text-align:left;padding:9px;border-bottom:1px solid #263550;color:#9aa9c2">'+x+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr><td style="padding:9px;border-bottom:1px solid #263550">'+esc(r.name)+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+esc(r.best)+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+r.score+'/100</td><td style="padding:9px;border-bottom:1px solid #263550">'+esc(r.trend)+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+r.per.map(p=>esc(p.name)+': '+p.score).join(' · ')+'</td></tr>').join('')+'</tbody></table>';
+}
+function renderSignals(signals){
+ const esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+ const sorted=signals.slice().sort((a,b)=>b.score-a.score);
+ $('signalSummary').textContent=sorted.length?sorted.length+' confirmed setup(s) found. Sorted by market-quality score. Re-scan for updates.':'No qualifying entry right now. The scanner will wait for a closed bullish/bearish candle that agrees with market structure.';
+ $('signalTable').innerHTML=sorted.length?'<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+['Market','Signal','Timeframe','Quality','Confirmation','Entry','Stop loss','Target'].map(x=>'<th style="text-align:left;padding:9px;border-bottom:1px solid #263550;color:#9aa9c2">'+x+'</th>').join('')+'</tr></thead><tbody>'+sorted.map(s=>'<tr><td style="padding:9px;border-bottom:1px solid #263550">'+esc(s.name)+'</td><td style="padding:9px;border-bottom:1px solid #263550;color:'+(s.side==='BUY'?'#27c58b':'#ff657a')+';font-weight:800">'+s.side+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+s.tf+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+s.score+'/100</td><td style="padding:9px;border-bottom:1px solid #263550">'+esc(s.pattern)+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+fmt(s.entry)+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+fmt(s.stop)+'</td><td style="padding:9px;border-bottom:1px solid #263550">'+fmt(s.target)+'</td></tr>').join('')+'</tbody></table>':'';
+}
+function toggleBackgroundScanner(){
+ if(backgroundOn){clearInterval(backgroundTimer);backgroundTimer=null;backgroundOn=false;$('background').textContent='Start background scanner';$('scanSummary').textContent='Background scanning paused.';return}
+ if(!ws||ws.readyState!==1){diag('Connect to Deriv before starting the background scanner.');status('Not connected');return}
+ backgroundOn=true;$('background').textContent='Stop background scanner';$('scanSummary').textContent='Background scanner running. It scans now, then repeats every 5 minutes while this page remains open.';
+ scanAllMarkets();
+ backgroundTimer=setInterval(()=>{if(backgroundOn&&ws?.readyState===1&&!scanRunning)scanAllMarkets()},5*60*1000);
 }
 async function analyze(){
  const sym=$('market').value;if(!sym){diag('Choose a market after connecting.');return}
@@ -252,7 +283,7 @@ async function analyze(){
  if(alertOn&&(long||short)&&decision!==lastAlert){if('Notification'in window&&Notification.permission==='granted')new Notification('Volatility AI: '+decision,{body:sym+' · '+confirm.pattern+' · '+fmt(last)});lastAlert=decision}
  }catch(e){status('Analysis failed');diag(e.message)}finally{$('analyze').disabled=false}
 }
-$('connect').onclick=connect;$('analyze').onclick=analyze;$('scanAll').onclick=scanAllMarkets;$('market').onchange=async()=>{clearAnalysis();const sym=$('market').value;$('price').textContent='Switching to '+sym+'…';if(ws?.readyState===1){await subscribeTicks();if($('market').value===sym)await analyze()}else{$('price').textContent='Connect to load live price';}};$('style').onchange=()=>{if($('market').value)analyze()};$('alerts').onclick=async()=>{if(!('Notification'in window)){alert('Browser notifications are not supported.');return}const p=await Notification.requestPermission();alertOn=p==='granted';$('alerts').textContent=alertOn?'Alerts enabled':'Enable signal alerts'};
+$('connect').onclick=connect;$('analyze').onclick=analyze;$('scanAll').onclick=scanAllMarkets;$('background').onclick=toggleBackgroundScanner;$('market').onchange=async()=>{clearAnalysis();const sym=$('market').value;$('price').textContent='Switching to '+sym+'…';if(ws?.readyState===1){await subscribeTicks();if($('market').value===sym)await analyze()}else{$('price').textContent='Connect to load live price';}};$('style').onchange=()=>{if($('market').value)analyze()};$('alerts').onclick=async()=>{if(!('Notification'in window)){alert('Browser notifications are not supported.');return}const p=await Notification.requestPermission();alertOn=p==='granted';$('alerts').textContent=alertOn?'Alerts enabled':'Enable signal alerts'};
 window.addEventListener('resize',()=>{const g=tfSet();if(candlesByTf[g[0]])draw(candlesByTf[g[0]])});
 })();
 </script></body></html>
