@@ -5,7 +5,7 @@
 *{box-sizing:border-box}body{margin:0;background:linear-gradient(160deg,#0b1020,#101a2e);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}header{padding:22px max(18px,calc((100% - 1100px)/2));border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}h1{font-size:22px;margin:0;letter-spacing:.08em}h1 span{color:var(--green)}.sub,.muted{color:var(--muted)}.status{border:1px solid var(--line);border-radius:30px;padding:10px 14px;color:var(--amber)}.status.ok{color:var(--green)}main{max-width:1100px;margin:22px auto;padding:0 16px 40px}.controls{display:grid;grid-template-columns:2fr 1fr;gap:12px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}select,button{font:inherit;color:var(--text);background:#1a2740;border:1px solid var(--line);border-radius:12px;padding:13px 15px;min-height:48px}button{cursor:pointer;font-weight:700}button.primary{background:#167c60;border-color:#249c78}button:disabled{opacity:.5;cursor:wait}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:18px}.card{background:rgba(18,27,48,.92);border:1px solid var(--line);border-radius:18px;padding:18px;min-width:0}.label{font-size:12px;letter-spacing:.12em;color:var(--muted);text-transform:uppercase}.big{font-size:27px;font-weight:800;margin:8px 0}.decision{font-size:28px;font-weight:900}.green{color:var(--green)}.red{color:var(--red)}.amber{color:var(--amber)}.wide{grid-column:1/-1}.levels{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.level{background:#0e1729;border:1px solid var(--line);border-radius:12px;padding:12px}.level b{display:block;margin-top:6px;overflow-wrap:anywhere}.reason{padding:9px 0;border-bottom:1px solid #263550}.reason:last-child{border:0}.chart{height:260px;width:100%;display:block}.small{font-size:12px;color:var(--muted)}footer{color:var(--muted);font-size:12px;padding:20px 0}.error{color:var(--red);white-space:pre-wrap}.tag{display:inline-block;border:1px solid var(--line);border-radius:20px;padding:4px 9px;margin:3px;color:var(--muted);font-size:12px}
 @media(max-width:650px){.controls,.grid{grid-template-columns:1fr}.wide{grid-column:auto}.levels{grid-template-columns:1fr 1fr}header{align-items:flex-start}.decision{font-size:24px}}
 </style></head><body>
-<header><div><h1>VOLATILITY <span>AI</span></h1><div class="sub">TOP-DOWN DERIV TRADING ANALYST · V2.0</div></div><div id="status" class="status">● Not connected</div></header>
+<header><div><h1>VOLATILITY <span>AI</span></h1><div class="sub">MARKET QUALITY + CLOSED-CANDLE ANALYST · V3.0</div></div><div id="status" class="status">● Not connected</div></header>
 <main><section class="controls"><select id="market"><option>Connect to load Volatility Indices</option></select><select id="style"><option value="scalp">Scalping · 1m / 5m / 15m</option><option value="intraday">Intraday · 15m / 1h / 4h</option></select></section>
 <div class="actions"><button id="connect" class="primary">Connect live data</button><button id="analyze">Analyze selected</button><button id="scanAll" class="primary">Scan all markets</button><button id="alerts">Enable signal alerts</button></div>
 <section class="grid">
@@ -130,19 +130,52 @@ function draw(cs){const c=$('chart'),ctx=c.getContext('2d'),w=c.clientWidth||700
 const SCAN_TFS=[900,1800,7200,10800,14400];
 const tfName=g=>({900:'15m',1800:'30m',7200:'2h',10800:'3h',14400:'4h'}[g]||g+'s');
 function structureStats(cs){
- if(!cs||cs.length<45)return {score:0,trend:'Insufficient data',detail:'Not enough candles'};
- const a=cs.slice(-90), highs=[],lows=[];
+ if(!cs||cs.length<50)return {score:0,trend:'Insufficient data',detail:'Need at least 50 candles'};
+ const a=cs.slice(-120), highs=[],lows=[];
  for(let i=2;i<a.length-2;i++){
   if(a[i].high>a[i-1].high&&a[i].high>a[i-2].high&&a[i].high>=a[i+1].high&&a[i].high>=a[i+2].high)highs.push({i,p:a[i].high});
   if(a[i].low<a[i-1].low&&a[i].low<a[i-2].low&&a[i].low<=a[i+1].low&&a[i].low<=a[i+2].low)lows.push({i,p:a[i].low});
  }
- const hh=highs.slice(-3),ll=lows.slice(-3);let up=0,down=0;
- if(hh.length>=2){if(hh.at(-1).p>hh.at(-2).p)up++;else if(hh.at(-1).p<hh.at(-2).p)down++}
- if(ll.length>=2){if(ll.at(-1).p>ll.at(-2).p)up++;else if(ll.at(-1).p<ll.at(-2).p)down++}
- const close=a.at(-1).close,range=Math.max(...a.slice(-30).map(x=>x.high))-Math.min(...a.slice(-30).map(x=>x.low));
- const atrv=atr(a),noise=atrv?range/(atrv*Math.sqrt(30)):0;
- const aligned=up===2||down===2,score=Math.round((aligned?55:(up||down?35:15))+(noise>1.8?20:noise>1.2?12:0)+(hh.length>=2&&ll.length>=2?10:0));
- return {score:Math.min(100,score),trend:up>down?'Bullish structure':down>up?'Bearish structure':'Mixed / ranging',detail:'Swing highs '+(hh.length>=2?(hh.at(-1).p>hh.at(-2).p?'HH':'LH'):'n/a')+' · swing lows '+(ll.length>=2?(ll.at(-1).p>ll.at(-2).p?'HL':'LL'):'n/a'),last:close,levels:levels(a)};
+ const last=a.at(-1),atrv=atr(a),recent=a.slice(-60),tol=Math.max(atrv*.25,last.close*.00015);
+ const zones=[];
+ for(const p of [...highs.map(x=>({p:x.p,t:'R'})),...lows.map(x=>({p:x.p,t:'S'}))]){
+  let z=zones.find(v=>v.t===p.t&&Math.abs(v.p-p.p)<=tol*2);
+  if(z){z.p=(z.p*z.n+p.p)/(z.n+1);z.n++}else zones.push({p:p.p,t:p.t,n:1,touches:0});
+ }
+ for(const z of zones)for(let i=0;i<recent.length;i++){
+  const c=recent[i];if(Math.abs((z.t==='R'?c.high:c.low)-z.p)<=tol&&Math.abs(c.close-z.p)>tol*.35)z.touches++;
+ }
+ const meaningful=zones.filter(z=>z.touches>0),touches=meaningful.reduce((s,z)=>s+Math.min(z.touches,4),0);
+ let hh=0,ll=0,lh=0,hl=0;
+ if(highs.length>=2){for(let i=1;i<highs.length;i++){if(highs[i].p>highs[i-1].p)hh++;else lh++}}
+ if(lows.length>=2){for(let i=1;i<lows.length;i++){if(lows[i].p>lows[i-1].p)hl++;else ll++}}
+ const swingN=Math.max(1,hh+lh+hl+ll),directional=Math.max(hh+hl,lh+ll)/swingN;
+ let breaks=0,falseBreaks=0,retests=0;
+ for(let i=Math.max(20,a.length-50);i<a.length-2;i++){
+  const prior=a.slice(Math.max(0,i-20),i),rh=Math.max(...prior.map(c=>c.high)),rl=Math.min(...prior.map(c=>c.low)),c=a[i],next=a.slice(i+1,Math.min(a.length,i+4));
+  if(c.close>rh||c.close<rl){breaks++;const up=c.close>rh,held=next.some(n=>up?n.low<=rh+tol&&n.close>rh:n.high>=rl-tol&&n.close<rl);if(held)retests++;else if(next.length>=2)falseBreaks++}
+ }
+ const respect=Math.min(100,touches*9),swings=directional*100,breakQuality=breaks?retests/breaks*100:55,cleanRetests=breaks?retests/breaks*100:50,falseRate=breaks?falseBreaks/breaks:0;
+ const noiseRatio=atrv?((Math.max(...recent.map(c=>c.high))-Math.min(...recent.map(c=>c.low)))/(atrv*Math.sqrt(recent.length))):0;
+ const noisePenalty=Math.min(100,Math.max(0,(1.25-noiseRatio)*65));
+ const score=Math.round(Math.max(0,Math.min(100,respect*.25+swings*.20+breakQuality*.20+cleanRetests*.15+(100-falseRate*100)*.15+noisePenalty*.05)));
+ const up=hh+hl,down=lh+ll,trend=up>down?'Bullish structure':down>up?'Bearish structure':'Mixed / ranging';
+ return {score,trend,detail:'S/R touches '+touches+' · swing sequence '+(up+down)+' · breakout retests '+retests+'/'+breaks+' · false-break rate '+Math.round(falseRate*100)+'%',last:last.close,levels:levels(a),metrics:{touches,swings:Math.round(swings),breakQuality:Math.round(breakQuality),falseBreakRate:Math.round(falseRate*100)}};
+}
+function candleConfirmation(cs){
+ if(!cs||cs.length<4)return {side:'NONE',pattern:'Insufficient candles',closed:false};
+ const now=Math.floor(Date.now()/1000),closed=cs.filter(c=>c.epoch+Number(window.currentGranularity||0)<=now);
+ const a=closed.length>=2?closed:cs.slice(0,-1);if(a.length<2)return {side:'NONE',pattern:'Waiting for candle close',closed:false};
+ const p=a.at(-2),c=a.at(-1),range=Math.max(c.high-c.low,1e-12),body=Math.abs(c.close-c.open),upper=c.high-Math.max(c.open,c.close),lower=Math.min(c.open,c.close)-c.low;
+ const bullEngulf=c.close>c.open&&p.close<p.open&&c.open<=p.close&&c.close>=p.open;
+ const bearEngulf=c.close<c.open&&p.close>p.open&&c.open>=p.close&&c.close<=p.open;
+ const bullPin=c.close>c.open&&lower>=body*2&&upper<=body*.8;
+ const bearPin=c.close<c.open&&upper>=body*2&&lower<=body*.8;
+ const strongBull=c.close>c.open&&body/range>=.65&&c.close>p.high;
+ const strongBear=c.close<c.open&&body/range>=.65&&c.close<p.low;
+ if(bullEngulf||bullPin||strongBull)return {side:'BULLISH',pattern:bullEngulf?'Bullish engulfing':bullPin?'Bullish rejection pin bar':'Strong bullish close',closed:true,candle:c};
+ if(bearEngulf||bearPin||strongBear)return {side:'BEARISH',pattern:bearEngulf?'Bearish engulfing':bearPin?'Bearish rejection pin bar':'Strong bearish close',closed:true,candle:c};
+ return {side:'NONE',pattern:'No qualifying closed confirmation candle',closed:true,candle:c};
 }
 async function scanAllMarkets(){
  if(scanRunning)return;if(!ws||ws.readyState!==1){diag('Connect to Deriv before scanning all markets.');status('Not connected');return}
@@ -180,30 +213,43 @@ function renderScan(rows){
 }
 async function analyze(){
  const sym=$('market').value;if(!sym){diag('Choose a market after connecting.');return}
- const run=++analysisRun;$('analyze').disabled=true;status('Fetching top-down candles for '+sym+'…');
+ const run=++analysisRun;$('analyze').disabled=true;status('Analyzing structure and closed-candle confirmation for '+sym+'…');
  try{
- const gs=tfSet(),sets=await Promise.all(gs.map(g=>getCandles(sym,g)));if(run!==analysisRun||$('market').value!==sym)return;candlesByTf={};gs.forEach((g,i)=>candlesByTf[g]=sets[i]);
- if(sets.some(x=>x.length<55))throw Error('Not enough candle history returned for all selected timeframes.');
- const [fast,mid,high]=sets,cl=fast.map(x=>x.close),mc=mid.map(x=>x.close),hc=high.map(x=>x.close);
+ const gs=tfSet(),sets=await Promise.all(gs.map(g=>getCandles(sym,g)));if(run!==analysisRun||$('market').value!==sym)return;
+ if(sets.some(x=>x.length<55))throw Error('Insufficient candle history. No signal generated.');
+ const now=Math.floor(Date.now()/1000),closedSets=sets.map((arr,i)=>arr.filter(c=>c.epoch+gs[i]<=now));
+ if(closedSets.some(x=>x.length<50))throw Error('Not enough fully closed candles. Wait for the next candle close.');
+ candlesByTf={};gs.forEach((g,i)=>candlesByTf[g]=closedSets[i]);
+ const [fast,mid,high]=closedSets,cl=fast.map(x=>x.close),mc=mid.map(x=>x.close),hc=high.map(x=>x.close);
  const ef=ema(cl.slice(-50),20),es=ema(cl.slice(-50),50),em=ema(mc.slice(-50),20),eh=ema(hc.slice(-50),20),rv=rsi(cl),av=atr(fast),lv=levels(fast),last=cl.at(-1);
  const bias=eh>ema(hc.slice(-50),50)?'BULLISH':eh<ema(hc.slice(-50),50)?'BEARISH':'NEUTRAL';
  const midBias=em>ema(mc.slice(-50),50)?'BULLISH':em<ema(mc.slice(-50),50)?'BEARISH':'NEUTRAL';
  const fastBias=ef>es?'BULLISH':ef<es?'BEARISH':'NEUTRAL';
- let score=(bias==='BULLISH'?1:bias==='BEARISH'?-1:0)+(midBias==='BULLISH'?1:midBias==='BEARISH'?-1:0)+(fastBias==='BULLISH'?1:fastBias==='BEARISH'?-1:0);
- const nearRes=(lv.r1-last)<av*.35&&(lv.r1-last)>=0,nearSup=(last-lv.s1)<av*.35&&(last-lv.s1)>=0;
- let decision='WAIT',why=['Higher timeframe: '+bias,'Middle timeframe: '+midBias,'Entry timeframe: '+fastBias,'RSI(14): '+rv.toFixed(1),'ATR(14): '+fmt(av)];
- if(score>=2&&rv<70&&!nearRes)decision='BUY SETUP';
- else if(score<=-2&&rv>30&&!nearSup)decision='SELL SETUP';
- else why.push('No trade: timeframe alignment or nearby support/resistance is not sufficiently clear.');
- if(nearRes)why.push('Price is close to resistance; avoid chasing a long entry.');
- if(nearSup)why.push('Price is close to support; avoid chasing a short entry.');
- const long=decision==='BUY SETUP',short=decision==='SELL SETUP',entry=last,stop=long?Math.min(lv.s1,last-1.5*av):short?Math.max(lv.r1,last+1.5*av):NaN,target=long?last+2*(last-stop):short?last-2*(stop-last):NaN;
- $('symbol').textContent=sym;$('decision').textContent=decision;$('decision').className='decision '+(long?'green':short?'red':'amber');$('confidence').textContent='Rule-based confluence · '+Math.abs(score)+'/3 timeframe alignment';$('bias').textContent=bias;$('biasnote').textContent='Mid: '+midBias+' · Entry: '+fastBias;
- $('rr').textContent=long||short?'1 : 2 (planned)':'No trade plan';$('entry').textContent=long||short?fmt(entry):'Wait';$('entrynote').textContent=long?'Only after a bullish candle confirms.':short?'Only after a bearish candle confirms.':'Wait for clearer alignment and a candle close.';
+ window.currentGranularity=gs[0];const confirm=candleConfirmation(fast),st=structureStats(fast);
+ const nearRes=(lv.r1-last)<av*.45&&(lv.r1-last)>=0,nearSup=(last-lv.s1)<av*.45&&(last-lv.s1)>=0;
+ const long=confirm.side==='BULLISH'&&bias==='BULLISH'&&midBias!=='BEARISH'&&fastBias==='BULLISH'&&!nearRes&&rv<75;
+ const short=confirm.side==='BEARISH'&&bias==='BEARISH'&&midBias!=='BULLISH'&&fastBias==='BEARISH'&&!nearSup&&rv>25;
+ const decision=long?'BUY CONFIRMED':short?'SELL CONFIRMED':'NO TRADE';
+ const stop=long?Math.min(lv.s1,last-1.5*av):short?Math.max(lv.r1,last+1.5*av):NaN;
+ const target=long?last+2*(last-stop):short?last-2*(stop-last):NaN;
+ const why=['Higher timeframe bias: '+bias,'Middle timeframe bias: '+midBias,'Entry timeframe bias: '+fastBias,'Closed candle: '+confirm.pattern,'Structure quality: '+st.score+'/100 ('+st.trend+')','RSI(14): '+rv.toFixed(1),'Nearest resistance: '+fmt(lv.r1)+' · nearest support: '+fmt(lv.s1)];
+ if(!confirm.closed||confirm.side==='NONE')why.push('No entry: wait for a qualifying bullish or bearish candle to CLOSE.');
+ if(confirm.side==='BULLISH'&&!long)why.push('Bullish candle detected, but higher-timeframe alignment, resistance clearance or RSI filter did not confirm a BUY.');
+ if(confirm.side==='BEARISH'&&!short)why.push('Bearish candle detected, but higher-timeframe alignment, support clearance or RSI filter did not confirm a SELL.');
+ if(nearRes)why.push('Price is too close to resistance for a fresh BUY.');
+ if(nearSup)why.push('Price is too close to support for a fresh SELL.');
+ $('symbol').textContent=sym;$('decision').textContent=decision;$('decision').className='decision '+(long?'green':short?'red':'amber');
+ $('confidence').textContent='Structure '+st.score+'/100 · closed-candle confirmation required';
+ $('bias').textContent=bias;$('biasnote').textContent='Mid: '+midBias+' · Entry: '+fastBias;
+ $('rr').textContent=long||short?'1 : 2 planned':'No trade plan';
+ $('entry').textContent=long||short?fmt(last):'Wait for confirmation';
+ $('entrynote').textContent=long||short?'Confirmed '+confirm.pattern+' on a closed candle.':confirm.pattern;
  $('stop').textContent=long||short?fmt(stop):'—';$('target').textContent=long||short?'Target: '+fmt(target):'—';
  for(const [id,val] of Object.entries({r2:lv.r2,r1:lv.r1,pivot:lv.p,s1:lv.s1,s2:lv.s2,last}))$(id).textContent=fmt(val);
- $('reasons').innerHTML=why.map(x=>'<div class="reason">'+x.replaceAll('&','&amp;').replaceAll('<','&lt;')+'</div>').join('');$('chartnote').textContent='Latest '+(gs[0]/60)+'-minute candles · '+fast.length+' bars';draw(fast);status('Analysis updated',true);diag('Market data received successfully. Last analysis: '+new Date().toLocaleString());
- if(alertOn&&decision!=='WAIT'&&decision!==lastAlert){if('Notification'in window&&Notification.permission==='granted')new Notification('Volatility AI: '+decision,{body:sym+' · Price '+fmt(last)});lastAlert=decision}
+ $('reasons').innerHTML=why.map(x=>'<div class="reason">'+x.replaceAll('&','&amp;').replaceAll('<','&lt;')+'</div>').join('');
+ $('chartnote').textContent='Latest fully closed '+(gs[0]/60)+'-minute candles · '+fast.length+' bars';draw(fast);
+ status('Analysis updated',true);diag('Closed-candle analysis complete for '+sym+' at '+new Date().toLocaleString());
+ if(alertOn&&(long||short)&&decision!==lastAlert){if('Notification'in window&&Notification.permission==='granted')new Notification('Volatility AI: '+decision,{body:sym+' · '+confirm.pattern+' · '+fmt(last)});lastAlert=decision}
  }catch(e){status('Analysis failed');diag(e.message)}finally{$('analyze').disabled=false}
 }
 $('connect').onclick=connect;$('analyze').onclick=analyze;$('scanAll').onclick=scanAllMarkets;$('market').onchange=async()=>{clearAnalysis();const sym=$('market').value;$('price').textContent='Switching to '+sym+'…';if(ws?.readyState===1){await subscribeTicks();if($('market').value===sym)await analyze()}else{$('price').textContent='Connect to load live price';}};$('style').onchange=()=>{if($('market').value)analyze()};$('alerts').onclick=async()=>{if(!('Notification'in window)){alert('Browser notifications are not supported.');return}const p=await Notification.requestPermission();alertOn=p==='granted';$('alerts').textContent=alertOn?'Alerts enabled':'Enable signal alerts'};
