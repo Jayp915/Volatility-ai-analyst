@@ -273,9 +273,9 @@ function detectRetestSetup(cs,granularity){
  if(candidate)return candidate;
  return {...empty,reason:'No fresh setup. Confirmation must be recent, price must not have run more than 0.5 ATR, and invalidated or expired setups are rejected.'};
 }
-function alignmentScore(side,biases){
- const wanted=side==='BUY'?'BULLISH':'BEARISH';
- const values=biases.map(b=>b===wanted?100:(b==='NEUTRAL'||b==='Mixed / ranging'?50:0));
+function alignmentScore(side,biases,setupType='BOS'){
+ const wanted=side==='BUY'?'BULLISH':'BEARISH',opposing=setupType==='CHoCH'?40:0;
+ const values=biases.map(b=>b===wanted?100:(b==='NEUTRAL'||b==='Mixed / ranging'?50:opposing));
  return values.length?values.reduce((a,b)=>a+b,0)/values.length:50;
 }
 function recordSignal(signal){
@@ -321,7 +321,7 @@ async function scanAllMarkets(){
    }
    for(const p of per){
     const setup=p.setup;if(!setup?.confirmation)continue;
-    const mtfScore=alignmentScore(setup.side,per.filter(x=>x.trend!=='Data unavailable'&&x.trend!=='Insufficient data').map(x=>x.trend==='Bullish structure'?'BULLISH':x.trend==='Bearish structure'?'BEARISH':'NEUTRAL'));
+    const mtfScore=alignmentScore(setup.side,per.filter(x=>x.trend!=='Data unavailable'&&x.trend!=='Insufficient data').map(x=>x.trend==='Bullish structure'?'BULLISH':x.trend==='Bearish structure'?'BEARISH':'NEUTRAL'),setup.type);
     const combinedScore=Math.round(p.score*.6+mtfScore*.4);
     if(combinedScore<65||mtfScore<40)continue;
     const last=setup.confirmation,av=atr(p.candles),side=setup.side;
@@ -351,7 +351,7 @@ function renderScan(rows){
 function renderSignals(){
  const pending=signalHistory.filter(s=>s.status==='PENDING').sort((a,b)=>b.score-a.score);
  const buys=pending.filter(s=>s.side==='BUY'),sells=pending.filter(s=>s.side==='SELL');
- $('signalSummary').textContent=pending.length?pending.length+' active confirmed setup(s) · '+signalHistory.filter(s=>s.status!=='PENDING').length+' resolved outcomes':'No active confirmed entries. Signals require a qualifying candle that has closed.';
+ $('signalSummary').textContent=pending.length?pending.length+' active retest-confirmed setup(s) · '+signalHistory.filter(s=>s.status!=='PENDING').length+' resolved outcomes':'No active retest-confirmed entries. A BOS/CHoCH breakout, retest and later closed confirmation candle are required.';
  const card=s=>'<div class="signal-card '+(s.side==='BUY'?'buy':'sell')+'"><div class="scoreline"><span>'+s.tf+' · Quality '+s.score+'/100</span><b>'+s.side+' · '+(s.type||'SETUP')+'</b></div><div class="name">'+s.name+'</div><div class="small">'+s.pattern+' · Level '+fmt(s.level)+' · '+(s.ageBars?('Age '+s.ageBars+' bars · '):'')+new Date(s.epoch*1000).toLocaleString()+'</div><div class="signal-price"><div>Entry<br><b>'+fmt(s.entry)+'</b></div><div>Stop loss<br><b>'+fmt(s.stop)+'</b></div><div>Target<br><b>'+fmt(s.target)+'</b></div><div>Tracking<br><b>'+s.status+'</b></div></div></div>';
  $('buySignals').innerHTML=buys.map(card).join('')||'<div class="small">No active BUY setups.</div>';
  $('sellSignals').innerHTML=sells.map(card).join('')||'<div class="small">No active SELL setups.</div>';
@@ -384,7 +384,7 @@ async function analyze(){
  const fastBias=ef>es?'BULLISH':ef<es?'BEARISH':'NEUTRAL';
  const retest=detectRetestSetup(fast,gs[0]),st=structureStats(fast);const confirm=retest.confirmation?{side:retest.side==='BUY'?'BULLISH':'BEARISH',pattern:retest.pattern,closed:true,candle:retest.confirmation}:{side:'NONE',pattern:retest.reason,closed:true};
  const nearRes=(lv.r1-last)<av*.45&&(lv.r1-last)>=0,nearSup=(last-lv.s1)<av*.45&&(last-lv.s1)>=0;
- const mtfScore=alignmentScore(retest.side,[bias,midBias,fastBias]),combinedScore=Math.round(st.score*.6+mtfScore*.4);
+ const mtfScore=alignmentScore(retest.side,[bias,midBias,fastBias],retest.type),combinedScore=Math.round(st.score*.6+mtfScore*.4);
  const long=retest.side==='BUY'&&combinedScore>=65&&mtfScore>=40&&!nearRes&&rv<75;
  const short=retest.side==='SELL'&&combinedScore>=65&&mtfScore>=40&&!nearSup&&rv>25;
  const decision=long?'BUY RETEST CONFIRMED':short?'SELL RETEST CONFIRMED':'NO TRADE';
