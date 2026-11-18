@@ -12,4 +12,4 @@ jobs:
         with:
           node-version: 20
       - name: Run deterministic strategy tests
-        run: node --test tests/retest-engine.test.cjs
+        run: node --test tests/*.test.cjs
