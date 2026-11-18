@@ -19,7 +19,7 @@
 </style></head><body>
 <header><div><h1>VOLATILITY <span>AI</span></h1><div class="sub">MOBILE MARKET SCANNER + SIGNAL TRACKER · V4.0</div></div><div id="status" class="status">● Not connected</div></header>
 <main><section class="controls"><select id="market"><option>Connect to load Volatility Indices</option></select><select id="style"><option value="scalp">Scalping · 1m / 5m / 15m</option><option value="intraday">Intraday · 15m / 1h / 4h</option></select></section>
-<div class="actions"><button id="connect" class="primary">Connect live data</button><button id="analyze">Analyze selected</button><button id="scanAll" class="primary">Scan all markets</button><button id="alerts">Enable signal alerts</button><button id="background">Start background scanner</button></div>
+<div class="actions"><button id="connect" class="primary">Connect live data</button><button id="analyze">Analyze selected</button><button id="scanAll" class="primary">Scan all markets</button><button id="research" class="primary">Test Donchian strategy</button><button id="alerts">Enable signal alerts</button><button id="background">Start background scanner</button></div>
 <section class="grid">
 <div class="card"><div class="label">Selected market / live price</div><div id="symbol" class="big">—</div><div id="price" class="muted">Waiting for connection</div></div>
 <div class="card"><div class="label">Analyst decision</div><div id="decision" class="decision amber">NO DATA</div><div id="confidence" class="muted">Connect to load candles</div></div>
@@ -30,8 +30,9 @@
 <div class="card"><div class="label">Entry plan</div><div class="big" id="entry">—</div><div class="muted" id="entrynote">—</div></div>
 <div class="card"><div class="label">Stop loss / take profit</div><div class="big" id="stop">—</div><div class="muted" id="target">—</div></div>
 <div class="card wide"><div class="label">Why this decision?</div><div id="reasons" class="muted">No analysis yet.</div></div>
-<div class="card wide"><div class="label">Connection diagnostics</div><div id="diagnostics" class="muted">WebSocket not started.</div></div><div class="card wide"><div class="label">All-market structure scanner</div><div id="scanSummary" class="muted">Press “Scan all markets” to rank every discovered Volatility Index across seven timeframes. Entries require breakout → retest → closed confirmation within 10 candles.</div><div id="scanTable" style="overflow-x:auto;margin-top:12px"></div></div><div class="card wide"><div class="label">Signal performance tracker</div><div class="stats-grid" id="performanceStats"></div><div id="performanceNote" class="small">Signals are tracked locally on this device. Outcomes are updated as later candles become available.</div></div><div class="card wide"><div class="label">Confirmed entry signals</div><div id="signalSummary" class="muted">No confirmed signals yet. Signals appear only after a BOS/CHoCH breakout, retest and later confirmation candle.</div><div class="signal-columns"><div><div class="label" style="margin-top:12px;color:var(--green)">BUY signals</div><div id="buySignals" class="signal-list"></div></div><div><div class="label" style="margin-top:12px;color:var(--red)">SELL signals</div><div id="sellSignals" class="signal-list"></div></div></div></div>
+<div class="card wide"><div class="label">Connection diagnostics</div><div id="diagnostics" class="muted">WebSocket not started.</div></div><div class="card wide"><div class="label">All-market structure scanner</div><div id="scanSummary" class="muted">Press “Scan all markets” to rank every discovered Volatility Index across seven timeframes. Entries require breakout → retest → closed confirmation within 10 candles.</div><div id="scanTable" style="overflow-x:auto;margin-top:12px"></div></div><div class="card wide"><div class="label">Donchian strategy research lab · 1H breakout / 4H trend</div><div class="muted">20-candle breakout · EMA 50/200 trend filter · 2× ATR initial stop · 10-candle channel exit. Historical simulation only; costs are an explicit proxy, not a live Deriv spread.</div><div id="researchSummary" class="small" style="margin-top:10px">Press “Test Donchian strategy” to fetch historical candles and compare the discovered indices.</div><div id="researchResults" style="overflow-x:auto;margin-top:12px"></div></div><div class="card wide"><div class="label">Signal performance tracker</div><div class="stats-grid" id="performanceStats"></div><div id="performanceNote" class="small">Signals are tracked locally on this device. Outcomes are updated as later candles become available.</div></div><div class="card wide"><div class="label">Confirmed entry signals</div><div id="signalSummary" class="muted">No confirmed signals yet. Signals appear only after a BOS/CHoCH breakout, retest and later confirmation candle.</div><div class="signal-columns"><div><div class="label" style="margin-top:12px;color:var(--green)">BUY signals</div><div id="buySignals" class="signal-list"></div></div><div><div class="label" style="margin-top:12px;color:var(--red)">SELL signals</div><div id="sellSignals" class="signal-list"></div></div></div></div>
 </section><footer>Analysis and alerts only. No orders are placed. Technical levels are estimates from recent candles, not guaranteed support/resistance. Always confirm on Deriv MT5 or Deriv Trader and risk-manage independently.</footer></main>
+<script src="donchian-engine.js"></script>
 <script>
 (()=>{
 const ENDPOINT='wss://api.derivws.com/trading/v1/options/ws/public';
@@ -300,6 +301,41 @@ function evaluatePendingSignals(symbol,tf,candles){
  }
  if(changed||signalHistory.length)saveSignalHistory();
 }
+async function getHistoryCandles(sym,granularity,count){
+ const d=await request({ticks_history:sym,count,end:'latest',style:'candles',granularity});
+ const now=Math.floor(Date.now()/1000);
+ return (d.candles||[]).map(c=>({epoch:+c.epoch,open:+c.open,high:+c.high,low:+c.low,close:+c.close}))
+ .filter(c=>[c.epoch,c.open,c.high,c.low,c.close].every(Number.isFinite)&&c.epoch+granularity<=now)
+ .sort((a,b)=>a.epoch-b.epoch);
+}
+async function researchDonchian(){
+ if(scanRunning||!ws||ws.readyState!==1){$('researchSummary').textContent='Connect to Deriv first. Wait until any active scan finishes.';return}
+ if(!symbols.length){await loadSymbols();if(!symbols.length)return}
+ if(!window.VolatilityStrategy){$('researchSummary').textContent='Strategy engine failed to load.';return}
+ scanRunning=true;$('research').disabled=true;$('scanAll').disabled=true;$('analyze').disabled=true;
+ const rows=[];let failed=0;$('researchResults').innerHTML='';
+ $('researchSummary').textContent='Downloading up to 1,000 completed 1H candles and 260 completed 4H candles per index…';
+ try{
+  for(let n=0;n<symbols.length;n++){
+   const market=symbols[n];
+   try{
+    const entry=await getHistoryCandles(market.symbol,3600,1000);
+    const trend=await getHistoryCandles(market.symbol,14400,260);
+    const result=window.VolatilityStrategy.backtest({entryCandles:entry,trendCandles:trend});
+    rows.push({name:market.display_name||market.symbol,symbol:market.symbol,...result.summary,bars:entry.length,trendBars:trend.length});
+   }catch(e){failed++;rows.push({name:market.display_name||market.symbol,symbol:market.symbol,error:e.message,trades:0,bars:0,trendBars:0})}
+   $('researchSummary').textContent='Testing '+(n+1)+'/'+symbols.length+' markets · '+failed+' data failures. This is a historical simulation, not a live signal.';
+  }
+  rows.sort((a,b)=>(b.expectancyR||0)-(a.expectancyR||0));
+  const fmtR=n=>Number.isFinite(n)?n.toFixed(2):'∞';
+  $('researchResults').innerHTML='<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th align="left">Market</th><th>Trades</th><th>Win %</th><th>PF</th><th>Expectancy (R)</th><th>Net R</th><th>Max DD (R)</th></tr></thead><tbody>'+
+   rows.map(x=>'<tr style="border-top:1px solid #263550"><td style="padding:9px 5px">'+String(x.name).replaceAll('&','&amp;').replaceAll('<','&lt;')+'</td><td align="center">'+x.trades+'</td><td align="center">'+(x.winRate||0).toFixed(1)+'</td><td align="center">'+(x.trades?fmtR(x.profitFactor):'—')+'</td><td align="center">'+(x.trades?fmtR(x.expectancyR):'—')+'</td><td align="center">'+(x.trades?fmtR(x.netR):'—')+'</td><td align="center">'+(x.trades?fmtR(x.maxDrawdownR):'—')+'</td></tr>').join('')+'</tbody></table>';
+  const qualified=rows.filter(x=>x.trades>=100&&x.expectancyR>0&&x.profitFactor>1.2);
+  $('researchSummary').textContent='Research complete · '+rows.length+' indices · '+failed+' data failures. Preliminary candidates passing ≥100 trades, positive net expectancy and PF >1.20: '+qualified.length+'. No market qualifies as proven until it passes a larger sample and out-of-sample/forward testing. Cost proxy: 0.05 ATR per completed trade.';
+  diag('Donchian historical research complete. No orders were placed.');
+ }catch(e){$('researchSummary').textContent='Research stopped: '+e.message;diag(e.message)}
+ finally{scanRunning=false;$('research').disabled=false;$('scanAll').disabled=false;$('analyze').disabled=false}
+}
 async function scanAllMarkets(){
  if(scanRunning)return;
  if(!ws||ws.readyState!==1){diag('Connect to Deriv before scanning all markets.');status('Not connected');return}
@@ -411,7 +447,7 @@ async function analyze(){
  if(alertOn&&(long||short)&&decision!==lastAlert){if('Notification'in window&&Notification.permission==='granted')new Notification('Volatility AI: '+decision,{body:sym+' · '+confirm.pattern+' · '+fmt(last)});lastAlert=decision}
  }catch(e){status('Analysis failed');diag(e.message)}finally{$('analyze').disabled=false}
 }
-$('connect').onclick=connect;$('analyze').onclick=analyze;$('scanAll').onclick=scanAllMarkets;$('background').onclick=toggleBackgroundScanner;$('market').onchange=async()=>{clearAnalysis();const sym=$('market').value;$('price').textContent='Switching to '+sym+'…';if(ws?.readyState===1){await subscribeTicks();if($('market').value===sym)await analyze()}else{$('price').textContent='Connect to load live price';}};$('style').onchange=()=>{if($('market').value)analyze()};$('alerts').onclick=async()=>{if(!('Notification'in window)){alert('Browser notifications are not supported.');return}const p=await Notification.requestPermission();alertOn=p==='granted';$('alerts').textContent=alertOn?'Alerts enabled':'Enable signal alerts'};
+$('connect').onclick=connect;$('research').onclick=researchDonchian;$('analyze').onclick=analyze;$('scanAll').onclick=scanAllMarkets;$('background').onclick=toggleBackgroundScanner;$('market').onchange=async()=>{clearAnalysis();const sym=$('market').value;$('price').textContent='Switching to '+sym+'…';if(ws?.readyState===1){await subscribeTicks();if($('market').value===sym)await analyze()}else{$('price').textContent='Connect to load live price';}};$('style').onchange=()=>{if($('market').value)analyze()};$('alerts').onclick=async()=>{if(!('Notification'in window)){alert('Browser notifications are not supported.');return}const p=await Notification.requestPermission();alertOn=p==='granted';$('alerts').textContent=alertOn?'Alerts enabled':'Enable signal alerts'};
 renderPerformance();renderSignals();window.addEventListener('resize',()=>{const g=tfSet();if(candlesByTf[g[0]])draw(candlesByTf[g[0]])});
 })();
 </script></body></html>
