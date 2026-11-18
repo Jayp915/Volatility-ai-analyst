@@ -30,12 +30,12 @@
 <div class="card"><div class="label">Entry plan</div><div class="big" id="entry">—</div><div class="muted" id="entrynote">—</div></div>
 <div class="card"><div class="label">Stop loss / take profit</div><div class="big" id="stop">—</div><div class="muted" id="target">—</div></div>
 <div class="card wide"><div class="label">Why this decision?</div><div id="reasons" class="muted">No analysis yet.</div></div>
-<div class="card wide"><div class="label">Connection diagnostics</div><div id="diagnostics" class="muted">WebSocket not started.</div></div><div class="card wide"><div class="label">All-market structure scanner</div><div id="scanSummary" class="muted">Press “Scan all markets” to rank every discovered Volatility Index across 15m, 30m, 2h, 3h and 4h.</div><div id="scanTable" style="overflow-x:auto;margin-top:12px"></div></div><div class="card wide"><div class="label">Signal performance tracker</div><div class="stats-grid" id="performanceStats"></div><div id="performanceNote" class="small">Signals are tracked locally on this device. Outcomes are updated as later candles become available.</div></div><div class="card wide"><div class="label">Confirmed entry signals</div><div id="signalSummary" class="muted">No confirmed signals yet. Signals appear only after a qualifying candle closes.</div><div class="signal-columns"><div><div class="label" style="margin-top:12px;color:var(--green)">BUY signals</div><div id="buySignals" class="signal-list"></div></div><div><div class="label" style="margin-top:12px;color:var(--red)">SELL signals</div><div id="sellSignals" class="signal-list"></div></div></div></div>
+<div class="card wide"><div class="label">Connection diagnostics</div><div id="diagnostics" class="muted">WebSocket not started.</div></div><div class="card wide"><div class="label">All-market structure scanner</div><div id="scanSummary" class="muted">Press “Scan all markets” to rank every discovered Volatility Index across seven timeframes. Entries require breakout → retest → closed confirmation within 10 candles.</div><div id="scanTable" style="overflow-x:auto;margin-top:12px"></div></div><div class="card wide"><div class="label">Signal performance tracker</div><div class="stats-grid" id="performanceStats"></div><div id="performanceNote" class="small">Signals are tracked locally on this device. Outcomes are updated as later candles become available.</div></div><div class="card wide"><div class="label">Confirmed entry signals</div><div id="signalSummary" class="muted">No confirmed signals yet. Signals appear only after a BOS/CHoCH breakout, retest and later confirmation candle.</div><div class="signal-columns"><div><div class="label" style="margin-top:12px;color:var(--green)">BUY signals</div><div id="buySignals" class="signal-list"></div></div><div><div class="label" style="margin-top:12px;color:var(--red)">SELL signals</div><div id="sellSignals" class="signal-list"></div></div></div></div>
 </section><footer>Analysis and alerts only. No orders are placed. Technical levels are estimates from recent candles, not guaranteed support/resistance. Always confirm on Deriv MT5 or Deriv Trader and risk-manage independently.</footer></main>
 <script>
 (()=>{
 const ENDPOINT='wss://api.derivws.com/trading/v1/options/ws/public';
-let ws=null,seq=0,pending=new Map(),symbols=[],candlesByTf={},livePrice=null,alertOn=false,lastAlert='',activeTickSubscriptionId=null,activeTickSymbol=null,analysisRun=0,reconnectTimer=null,reconnectDelay=1500,manualClose=false,scanRunning=false,backgroundTimer=null,backgroundOn=false,notifiedSignals=new Set(),signalHistory=loadSignalHistory(),seenSignalKeys=new Set(signalHistory.map(s=>[s.symbol,s.side,s.tf,s.epoch].join('|')));
+let ws=null,seq=0,pending=new Map(),symbols=[],candlesByTf={},livePrice=null,alertOn=false,lastAlert='',activeTickSubscriptionId=null,activeTickSymbol=null,analysisRun=0,reconnectTimer=null,reconnectDelay=1500,manualClose=false,scanRunning=false,backgroundTimer=null,backgroundOn=false,notifiedSignals=new Set(),signalHistory=loadSignalHistory(),seenSignalKeys=new Set(signalHistory.map(s=>[s.symbol,s.side,s.tf,s.epoch].join('|'))),lastMessageAt=0,lastTickAt=0,watchdogTimer=null,heartbeatTimer=null;
 function loadSignalHistory(){try{return JSON.parse(localStorage.getItem('volatilityAI.signalHistory')||'[]')}catch(e){return []}}
 function saveSignalHistory(){try{localStorage.setItem('volatilityAI.signalHistory',JSON.stringify(signalHistory.slice(0,200)))}catch(e){}}
 const $=id=>document.getElementById(id),fmt=n=>Number.isFinite(n)?n.toLocaleString(undefined,{maximumFractionDigits:5}):'—';
@@ -69,9 +69,10 @@ function connect(){
  status('Connecting…');diag('Opening secure WebSocket: '+ENDPOINT);
  try{ws=new WebSocket(ENDPOINT)}catch(e){status('Browser blocked WebSocket');diag(e.message);return}
  const timer=setTimeout(()=>{if(ws&&ws.readyState!==1){status('Connection timeout');diag('No WebSocket handshake within 15 seconds. Try another network or disable VPN/ad-blocking temporarily.')}},15000);
- ws.onopen=async()=>{clearTimeout(timer);reconnectDelay=1500;status('Connected · loading symbols',true);diag('WebSocket handshake successful. Requesting active_symbols…');try{await loadSymbols()}catch(e){status('Symbol request failed');diag(e.message)};};
- ws.onmessage=ev=>{let d;try{d=JSON.parse(ev.data)}catch{return}
+ ws.onopen=async()=>{clearTimeout(timer);reconnectDelay=1500;lastMessageAt=Date.now();status('Connected · loading symbols',true);diag('WebSocket handshake successful. Requesting active_symbols…');if(watchdogTimer)clearInterval(watchdogTimer);if(heartbeatTimer)clearInterval(heartbeatTimer);heartbeatTimer=setInterval(()=>{if(ws?.readyState===1)request({time:1},10000).catch(()=>{})},25000);watchdogTimer=setInterval(()=>{if(ws?.readyState===1&&Date.now()-lastMessageAt>65000){diag('No server messages for 65 seconds. Reopening stale connection…');try{ws.close()}catch(e){}}},10000);try{await loadSymbols()}catch(e){status('Symbol request failed');diag(e.message)};};
+ ws.onmessage=ev=>{lastMessageAt=Date.now();let d;try{d=JSON.parse(ev.data)}catch{return}
  if(d.msg_type==='tick'&&d.tick){
+   lastTickAt=Date.now();
    const sid=d.subscription?.id;
    if((!activeTickSymbol||activeTickSymbol===$('market').value)&&(!sid||!activeTickSubscriptionId||sid===activeTickSubscriptionId))showTick(d.tick);
  }
@@ -79,7 +80,7 @@ function connect(){
  if(d.msg_type==='history'&&d.history?.prices?.length){const n=d.history.prices.length-1;showTick({quote:d.history.prices[n],epoch:d.history.times?.[n]})}
  };
  ws.onerror=()=>{status('WebSocket error');diag('Browser reported a WebSocket handshake/network error. This occurs before Deriv can return a market-data response. Check network restrictions, VPN, Private DNS or browser extensions.')};
- ws.onclose=e=>{clearTimeout(timer);activeTickSubscriptionId=null;for(const p of pending.values())p.reject(Error('Socket closed'));pending.clear();if(!manualClose){status('Disconnected · reconnecting');diag('Connection lost (code '+e.code+'). Reconnecting automatically…');if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{if(!manualClose)connect()},reconnectDelay);reconnectDelay=Math.min(30000,reconnectDelay*2)}else{status('Disconnected');diag('Socket closed.')}};
+ ws.onclose=e=>{clearTimeout(timer);if(watchdogTimer){clearInterval(watchdogTimer);watchdogTimer=null}if(heartbeatTimer){clearInterval(heartbeatTimer);heartbeatTimer=null}activeTickSubscriptionId=null;for(const p of pending.values())p.reject(Error('Socket closed'));pending.clear();if(!manualClose){status('Disconnected · reconnecting');diag('Connection lost (code '+e.code+'). Reconnecting automatically…');if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{if(!manualClose)connect()},reconnectDelay);reconnectDelay=Math.min(30000,reconnectDelay*2)}else{status('Disconnected');diag('Socket closed.')}};
 }
 async function loadSymbols(){
  // The current Deriv public API renamed symbol/display_name to
@@ -191,6 +192,65 @@ function candleConfirmation(cs,granularity){
  if(bearEngulf||bearPin||strongBear)return {side:'BEARISH',pattern:bearEngulf?'Bearish engulfing':bearPin?'Bearish rejection pin bar':'Strong bearish close',closed:true,candle:c};
  return {side:'NONE',pattern:'No qualifying closed confirmation candle',closed:true,candle:c};
 }
+
+function confirmedPivots(cs,endIndex){
+ const highs=[],lows=[];
+ for(let i=2;i<=endIndex-2;i++){
+  if(cs[i].high>cs[i-1].high&&cs[i].high>cs[i-2].high&&cs[i].high>=cs[i+1].high&&cs[i].high>=cs[i+2].high)highs.push({i,p:cs[i].high});
+  if(cs[i].low<cs[i-1].low&&cs[i].low<cs[i-2].low&&cs[i].low<=cs[i+1].low&&cs[i].low<=cs[i+2].low)lows.push({i,p:cs[i].low});
+ }
+ return {highs,lows};
+}
+function priorStructureBias(cs,endIndex){
+ const p=confirmedPivots(cs,endIndex),h=p.highs.slice(-2),l=p.lows.slice(-2);
+ if(h.length<2||l.length<2)return 'RANGE';
+ if(h[1].p>h[0].p&&l[1].p>l[0].p)return 'BULLISH';
+ if(h[1].p<h[0].p&&l[1].p<l[0].p)return 'BEARISH';
+ return 'RANGE';
+}
+function detectRetestSetup(cs,granularity){
+ const empty={side:'NONE',type:'',pattern:'No confirmed breakout → retest → confirmation sequence',reason:'Waiting for a confirmed BOS/CHoCH breakout.'};
+ if(!cs||cs.length<55)return {...empty,reason:'Insufficient closed-candle history.'};
+ const now=Math.floor(Date.now()/1000),a=cs.filter(c=>c.epoch+granularity<=now);
+ if(a.length<55)return {...empty,reason:'Waiting for sufficient fully closed candles.'};
+ const lastIndex=a.length-1,firstBreak=Math.max(8,lastIndex-12);
+ let candidate=null;
+ for(let i=firstBreak;i<=lastIndex-2;i++){
+  const prefix=a.slice(0,i),p=confirmedPivots(prefix,prefix.length-1),ph=p.highs.at(-1),pl=p.lows.at(-1);
+  if(!ph||!pl)continue;
+  const c=a[i],prev=a[i-1],localAtr=atr(a.slice(Math.max(0,i-20),i+1));
+  if(!Number.isFinite(localAtr)||localAtr<=0)continue;
+  const buffer=localAtr*.10,zone=localAtr*.25;
+  let side=null,level=null;
+  if(c.close>ph.p+buffer&&prev.close<=ph.p){side='BUY';level=ph.p}
+  else if(c.close<pl.p-buffer&&prev.close>=pl.p){side='SELL';level=pl.p}
+  if(!side)continue;
+  const bias=priorStructureBias(prefix,prefix.length-1);
+  const type=(side==='BUY'&&bias==='BEARISH')||(side==='SELL'&&bias==='BULLISH')?'CHoCH':'BOS';
+  let retestIndex=-1,invalid=false;
+  for(let j=i+1;j<=Math.min(lastIndex,i+10);j++){
+   const r=a[j];
+   if(side==='BUY'){
+    if(r.close<level-zone){invalid=true;break}
+    if(r.low<=level+zone&&r.high>=level-zone&&r.close>=level-zone){retestIndex=j;break}
+   }else{
+    if(r.close>level+zone){invalid=true;break}
+    if(r.high>=level-zone&&r.low<=level+zone&&r.close<=level+zone){retestIndex=j;break}
+   }
+  }
+  if(invalid||retestIndex<0||retestIndex>=lastIndex)continue;
+  const confirmIndex=retestIndex+1;
+  if(confirmIndex!==lastIndex)continue;
+  const r=a[retestIndex],c2=a[confirmIndex],range=Math.max(c2.high-c2.low,1e-12),body=Math.abs(c2.close-c2.open);
+  const upper=c2.high-Math.max(c2.open,c2.close),lower=Math.min(c2.open,c2.close)-c2.low;
+  const bull=c2.close>c2.open&&(body/range>=.55||(lower>=body*1.8&&upper<=body));
+  const bear=c2.close<c2.open&&(body/range>=.55||(upper>=body*1.8&&lower<=body));
+  if(!(side==='BUY'?bull&&c2.close>level:bear&&c2.close<level))continue;
+  candidate={side,type,level,breakout:a[i],retest:r,confirmation:c2,atr:localAtr,pattern:(side==='BUY'?'Bullish':'Bearish')+' retest rejection candle',barsAfterBreak:confirmIndex-i};
+ }
+ return candidate||{...empty,reason:'No fresh retest-confirmation setup. Setups expire after 10 completed candles or are cancelled when the broken level fails.'};
+}
+
 function recordSignal(signal){
  const key=[signal.symbol,signal.side,signal.tf,signal.epoch].join('|');
  if(seenSignalKeys.has(key))return false;
@@ -229,12 +289,12 @@ async function scanAllMarkets(){
     try{
      const candles=await getCandles(market.symbol,tf);evaluatePendingSignals(market.symbol,tfName(tf),candles);
      const st=structureStats(candles);per.push({tf,name:tfName(tf),...st,candles});
-     const confirm=candleConfirmation(candles,tf);
-     const aligned=(confirm.side==='BULLISH'&&st.trend==='Bullish structure')||(confirm.side==='BEARISH'&&st.trend==='Bearish structure');
-     if(st.score>=65&&aligned&&confirm.closed&&confirm.candle){
-      const last=confirm.candle,av=atr(candles),lv=levels(candles),side=confirm.side==='BULLISH'?'BUY':'SELL';
-      const entry=last.close,stop=side==='BUY'?Math.min(lv.s1,entry-1.5*av):Math.max(lv.r1,entry+1.5*av),risk=Math.abs(entry-stop),target=side==='BUY'?entry+2*risk:entry-2*risk;
-      const sig={name:market.display_name||market.symbol,symbol:market.symbol,side,tf:tfName(tf),score:st.score,pattern:confirm.pattern,entry,stop,target,epoch:last.epoch};
+     const retest=detectRetestSetup(candles,tf);
+     const aligned=(retest.side==='BUY'&&st.trend==='Bullish structure')||(retest.side==='SELL'&&st.trend==='Bearish structure');
+     if(st.score>=65&&aligned&&retest.confirmation){
+      const last=retest.confirmation,av=atr(candles),side=retest.side;
+      const entry=last.close,stop=side==='BUY'?Math.min(retest.retest.low-retest.atr*.20,entry-1.2*av):Math.max(retest.retest.high+retest.atr*.20,entry+1.2*av),risk=Math.abs(entry-stop),target=side==='BUY'?entry+2*risk:entry-2*risk;
+      const sig={name:market.display_name||market.symbol,symbol:market.symbol,side,type:retest.type,level:retest.level,breakoutEpoch:retest.breakout.epoch,retestEpoch:retest.retest.epoch,tf:tfName(tf),score:st.score,pattern:retest.pattern,entry,stop,target,epoch:last.epoch};
       if(recordSignal(sig)){newSignals.push(sig)}
      }
     }catch(e){fail++;per.push({tf,name:tfName(tf),score:0,trend:'Data unavailable',detail:e.message,candles:[]})}
@@ -263,7 +323,7 @@ function renderSignals(){
  const pending=signalHistory.filter(s=>s.status==='PENDING').sort((a,b)=>b.score-a.score);
  const buys=pending.filter(s=>s.side==='BUY'),sells=pending.filter(s=>s.side==='SELL');
  $('signalSummary').textContent=pending.length?pending.length+' active confirmed setup(s) · '+signalHistory.filter(s=>s.status!=='PENDING').length+' resolved outcomes':'No active confirmed entries. Signals require a qualifying candle that has closed.';
- const card=s=>'<div class="signal-card '+(s.side==='BUY'?'buy':'sell')+'"><div class="scoreline"><span>'+s.tf+' · Quality '+s.score+'/100</span><b>'+s.side+'</b></div><div class="name">'+s.name+'</div><div class="small">'+s.pattern+' · '+new Date(s.epoch*1000).toLocaleString()+'</div><div class="signal-price"><div>Entry<br><b>'+fmt(s.entry)+'</b></div><div>Stop loss<br><b>'+fmt(s.stop)+'</b></div><div>Target<br><b>'+fmt(s.target)+'</b></div><div>Tracking<br><b>'+s.status+'</b></div></div></div>';
+ const card=s=>'<div class="signal-card '+(s.side==='BUY'?'buy':'sell')+'"><div class="scoreline"><span>'+s.tf+' · Quality '+s.score+'/100</span><b>'+s.side+' · '+(s.type||'SETUP')+'</b></div><div class="name">'+s.name+'</div><div class="small">'+s.pattern+' · Level '+fmt(s.level)+' · '+new Date(s.epoch*1000).toLocaleString()+'</div><div class="signal-price"><div>Entry<br><b>'+fmt(s.entry)+'</b></div><div>Stop loss<br><b>'+fmt(s.stop)+'</b></div><div>Target<br><b>'+fmt(s.target)+'</b></div><div>Tracking<br><b>'+s.status+'</b></div></div></div>';
  $('buySignals').innerHTML=buys.map(card).join('')||'<div class="small">No active BUY setups.</div>';
  $('sellSignals').innerHTML=sells.map(card).join('')||'<div class="small">No active SELL setups.</div>';
 }
@@ -293,29 +353,30 @@ async function analyze(){
  const bias=eh>ema(hc.slice(-50),50)?'BULLISH':eh<ema(hc.slice(-50),50)?'BEARISH':'NEUTRAL';
  const midBias=em>ema(mc.slice(-50),50)?'BULLISH':em<ema(mc.slice(-50),50)?'BEARISH':'NEUTRAL';
  const fastBias=ef>es?'BULLISH':ef<es?'BEARISH':'NEUTRAL';
- const confirm=candleConfirmation(fast,gs[0]),st=structureStats(fast);
+ const retest=detectRetestSetup(fast,gs[0]),st=structureStats(fast);const confirm=retest.confirmation?{side:retest.side==='BUY'?'BULLISH':'BEARISH',pattern:retest.pattern,closed:true,candle:retest.confirmation}:{side:'NONE',pattern:retest.reason,closed:true};
  const nearRes=(lv.r1-last)<av*.45&&(lv.r1-last)>=0,nearSup=(last-lv.s1)<av*.45&&(last-lv.s1)>=0;
- const long=confirm.side==='BULLISH'&&bias==='BULLISH'&&midBias!=='BEARISH'&&fastBias==='BULLISH'&&!nearRes&&rv<75;
- const short=confirm.side==='BEARISH'&&bias==='BEARISH'&&midBias!=='BULLISH'&&fastBias==='BEARISH'&&!nearSup&&rv>25;
- const decision=long?'BUY CONFIRMED':short?'SELL CONFIRMED':'NO TRADE';
- const stop=long?Math.min(lv.s1,last-1.5*av):short?Math.max(lv.r1,last+1.5*av):NaN;
- const target=long?last+2*(last-stop):short?last-2*(stop-last):NaN;
+ const long=retest.side==='BUY'&&st.score>=65&&bias==='BULLISH'&&midBias!=='BEARISH'&&fastBias==='BULLISH'&&!nearRes&&rv<75;
+ const short=retest.side==='SELL'&&st.score>=65&&bias==='BEARISH'&&midBias!=='BULLISH'&&fastBias==='BEARISH'&&!nearSup&&rv>25;
+ const decision=long?'BUY RETEST CONFIRMED':short?'SELL RETEST CONFIRMED':'NO TRADE';
+ const entryPrice=retest.confirmation?.close??last;
+ const stop=long?Math.min(retest.retest.low-retest.atr*.20,entryPrice-1.2*av):short?Math.max(retest.retest.high+retest.atr*.20,entryPrice+1.2*av):NaN;
+ const target=long?entryPrice+2*(entryPrice-stop):short?entryPrice-2*(stop-entryPrice):NaN;
  const why=['Higher timeframe bias: '+bias,'Middle timeframe bias: '+midBias,'Entry timeframe bias: '+fastBias,'Closed candle: '+confirm.pattern,'Structure quality: '+st.score+'/100 ('+st.trend+')','RSI(14): '+rv.toFixed(1),'Nearest resistance: '+fmt(lv.r1)+' · nearest support: '+fmt(lv.s1)];
- if(!confirm.closed||confirm.side==='NONE')why.push('No entry: wait for a qualifying bullish or bearish candle to CLOSE.');
+ if(!retest.confirmation)why.push(retest.reason);else why.push(retest.type+' confirmed · breakout level '+fmt(retest.level)+' · retest completed after '+retest.barsAfterBreak+' candles.');
  if(confirm.side==='BULLISH'&&!long)why.push('Bullish candle detected, but higher-timeframe alignment, resistance clearance or RSI filter did not confirm a BUY.');
  if(confirm.side==='BEARISH'&&!short)why.push('Bearish candle detected, but higher-timeframe alignment, support clearance or RSI filter did not confirm a SELL.');
  if(nearRes)why.push('Price is too close to resistance for a fresh BUY.');
  if(nearSup)why.push('Price is too close to support for a fresh SELL.');
  $('symbol').textContent=sym;$('decision').textContent=decision;$('decision').className='decision '+(long?'green':short?'red':'amber');
- $('confidence').textContent='Structure '+st.score+'/100 · closed-candle confirmation required';
+ $('confidence').textContent='Structure '+st.score+'/100 · 10-candle retest window · '+(retest.type||'No active setup');
  $('bias').textContent=bias;$('biasnote').textContent='Mid: '+midBias+' · Entry: '+fastBias;
  $('rr').textContent=long||short?'1 : 2 planned':'No trade plan';
- $('entry').textContent=long||short?fmt(last):'Wait for confirmation';
- $('entrynote').textContent=long||short?'Confirmed '+confirm.pattern+' on a closed candle.':confirm.pattern;
+ $('entry').textContent=long||short?fmt(entryPrice):'Wait for retest';
+ $('entrynote').textContent=long||short?retest.type+' · Breakout → retest → closed confirmation.':retest.reason;
  $('stop').textContent=long||short?fmt(stop):'—';$('target').textContent=long||short?'Target: '+fmt(target):'—';
  for(const [id,val] of Object.entries({r2:lv.r2,r1:lv.r1,pivot:lv.p,s1:lv.s1,s2:lv.s2,last}))$(id).textContent=fmt(val);
  $('reasons').innerHTML=why.map(x=>'<div class="reason">'+x.replaceAll('&','&amp;').replaceAll('<','&lt;')+'</div>').join('');
- $('chartnote').textContent='Latest fully closed '+(gs[0]/60)+'-minute candles · '+fast.length+' bars';draw(fast);
+ $('chartnote').textContent='Latest fully closed '+(gs[0]/60)+'-minute candles · '+fast.length+' bars · BOS/CHoCH retest entries';draw(fast);
  status('Analysis updated',true);diag('Closed-candle analysis complete for '+sym+' at '+new Date().toLocaleString());
  if(alertOn&&(long||short)&&decision!==lastAlert){if('Notification'in window&&Notification.permission==='granted')new Notification('Volatility AI: '+decision,{body:sym+' · '+confirm.pattern+' · '+fmt(last)});lastAlert=decision}
  }catch(e){status('Analysis failed');diag(e.message)}finally{$('analyze').disabled=false}
