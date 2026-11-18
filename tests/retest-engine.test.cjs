@@ -3,13 +3,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
 const html = fs.readFileSync('index.html', 'utf8');
-const scripts = [...html.matchAll(/<script\\b[^>]*>([\\s\\S]*?)<\\/script>/gi)].map(m => m[1]);
+const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]);
 assert.ok(scripts.length, 'index.html must contain its application script');
 for (const script of scripts) new Function(script);
 
 function between(name, next) {
   const start = html.indexOf('function ' + name + '(');
-  const end = html.indexOf('\\nfunction ' + next + '(', start);
+  const end = html.indexOf('\nfunction ' + next + '(', start);
   assert.ok(start >= 0 && end > start, 'could not extract ' + name);
   return html.slice(start, end);
 }
@@ -19,10 +19,10 @@ const helpers = [
   between('priorStructureBias', 'detectRetestSetup'),
   between('detectRetestSetup', 'alignmentScore'),
   between('alignmentScore', 'recordSignal')
-].join('\\n');
-const runEngine = new Function('cs', 'g', helpers + '\\nreturn detectRetestSetup(cs, g);');
+].join('\n');
+const runEngine = new Function('cs', 'g', helpers + '\nreturn detectRetestSetup(cs, g);');
 const runAlignment = new Function('side', 'biases', 'type',
-  between('alignmentScore', 'recordSignal') + '\\nreturn alignmentScore(side, biases, type);');
+  between('alignmentScore', 'recordSignal') + '\nreturn alignmentScore(side, biases, type);');
 
 const baseEpoch = 1700000000;
 function candle(i, open, close, high, low) {
