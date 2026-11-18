@@ -19,7 +19,7 @@
 </style></head><body>
 <header><div><h1>VOLATILITY <span>AI</span></h1><div class="sub">MOBILE MARKET SCANNER + SIGNAL TRACKER · V4.0</div></div><div id="status" class="status">● Not connected</div></header>
 <main><section class="controls"><select id="market"><option>Connect to load Volatility Indices</option></select><select id="style"><option value="scalp">Scalping · 1m / 5m / 15m</option><option value="intraday">Intraday · 15m / 1h / 4h</option></select></section>
-<div class="actions"><button id="connect" class="primary">Connect live data</button><button id="analyze">Analyze selected</button><button id="scanAll" class="primary">Scan all markets</button><button id="alerts">Enable signal alerts</button><button id="background">Start background scanner</button></div>
+<div class="actions"><button id="connect" class="primary">Connect live data</button><button id="analyze">Analyze selected</button><button id="scanAll" class="primary">Scan all markets</button><button id="research" class="primary">Test Donchian strategy</button><button id="alerts">Enable signal alerts</button><button id="background">Start background scanner</button></div>
 <section class="grid">
 <div class="card"><div class="label">Selected market / live price</div><div id="symbol" class="big">—</div><div id="price" class="muted">Waiting for connection</div></div>
 <div class="card"><div class="label">Analyst decision</div><div id="decision" class="decision amber">NO DATA</div><div id="confidence" class="muted">Connect to load candles</div></div>
@@ -30,12 +30,13 @@
 <div class="card"><div class="label">Entry plan</div><div class="big" id="entry">—</div><div class="muted" id="entrynote">—</div></div>
 <div class="card"><div class="label">Stop loss / take profit</div><div class="big" id="stop">—</div><div class="muted" id="target">—</div></div>
 <div class="card wide"><div class="label">Why this decision?</div><div id="reasons" class="muted">No analysis yet.</div></div>
-<div class="card wide"><div class="label">Connection diagnostics</div><div id="diagnostics" class="muted">WebSocket not started.</div></div><div class="card wide"><div class="label">All-market structure scanner</div><div id="scanSummary" class="muted">Press “Scan all markets” to rank every discovered Volatility Index across 15m, 30m, 2h, 3h and 4h.</div><div id="scanTable" style="overflow-x:auto;margin-top:12px"></div></div><div class="card wide"><div class="label">Signal performance tracker</div><div class="stats-grid" id="performanceStats"></div><div id="performanceNote" class="small">Signals are tracked locally on this device. Outcomes are updated as later candles become available.</div></div><div class="card wide"><div class="label">Confirmed entry signals</div><div id="signalSummary" class="muted">No confirmed signals yet. Signals appear only after a qualifying candle closes.</div><div class="signal-columns"><div><div class="label" style="margin-top:12px;color:var(--green)">BUY signals</div><div id="buySignals" class="signal-list"></div></div><div><div class="label" style="margin-top:12px;color:var(--red)">SELL signals</div><div id="sellSignals" class="signal-list"></div></div></div></div>
+<div class="card wide"><div class="label">Connection diagnostics</div><div id="diagnostics" class="muted">WebSocket not started.</div></div><div class="card wide"><div class="label">All-market structure scanner</div><div id="scanSummary" class="muted">Press “Scan all markets” to rank every discovered Volatility Index across seven timeframes. Entries require breakout → retest → closed confirmation within 10 candles.</div><div id="scanTable" style="overflow-x:auto;margin-top:12px"></div></div><div class="card wide"><div class="label">Donchian strategy research lab · 1H breakout / 4H trend</div><div class="muted">20-candle breakout · EMA 50/200 trend filter · 2× ATR initial stop · 10-candle channel exit. Historical simulation only; costs are an explicit proxy, not a live Deriv spread.</div><div id="researchSummary" class="small" style="margin-top:10px">Press “Test Donchian strategy” to fetch historical candles and compare the discovered indices.</div><div id="researchResults" style="overflow-x:auto;margin-top:12px"></div></div><div class="card wide"><div class="label">Signal performance tracker</div><div class="stats-grid" id="performanceStats"></div><div id="performanceNote" class="small">Signals are tracked locally on this device. Outcomes are updated as later candles become available.</div></div><div class="card wide"><div class="label">Confirmed entry signals</div><div id="signalSummary" class="muted">No confirmed signals yet. Signals appear only after a BOS/CHoCH breakout, retest and later confirmation candle.</div><div class="signal-columns"><div><div class="label" style="margin-top:12px;color:var(--green)">BUY signals</div><div id="buySignals" class="signal-list"></div></div><div><div class="label" style="margin-top:12px;color:var(--red)">SELL signals</div><div id="sellSignals" class="signal-list"></div></div></div></div>
 </section><footer>Analysis and alerts only. No orders are placed. Technical levels are estimates from recent candles, not guaranteed support/resistance. Always confirm on Deriv MT5 or Deriv Trader and risk-manage independently.</footer></main>
+<script src="donchian-engine.js"></script>
 <script>
 (()=>{
 const ENDPOINT='wss://api.derivws.com/trading/v1/options/ws/public';
-let ws=null,seq=0,pending=new Map(),symbols=[],candlesByTf={},livePrice=null,alertOn=false,lastAlert='',activeTickSubscriptionId=null,activeTickSymbol=null,analysisRun=0,reconnectTimer=null,reconnectDelay=1500,manualClose=false,scanRunning=false,backgroundTimer=null,backgroundOn=false,notifiedSignals=new Set(),signalHistory=loadSignalHistory(),seenSignalKeys=new Set(signalHistory.map(s=>[s.symbol,s.side,s.tf,s.epoch].join('|')));
+let ws=null,seq=0,pending=new Map(),symbols=[],candlesByTf={},livePrice=null,alertOn=false,lastAlert='',activeTickSubscriptionId=null,activeTickSymbol=null,analysisRun=0,reconnectTimer=null,reconnectDelay=1500,manualClose=false,scanRunning=false,backgroundTimer=null,backgroundOn=false,notifiedSignals=new Set(),signalHistory=loadSignalHistory(),seenSignalKeys=new Set(signalHistory.map(s=>[s.symbol,s.side,s.tf,s.epoch].join('|'))),lastMessageAt=0,lastTickAt=0,watchdogTimer=null,heartbeatTimer=null;
 function loadSignalHistory(){try{return JSON.parse(localStorage.getItem('volatilityAI.signalHistory')||'[]')}catch(e){return []}}
 function saveSignalHistory(){try{localStorage.setItem('volatilityAI.signalHistory',JSON.stringify(signalHistory.slice(0,200)))}catch(e){}}
 const $=id=>document.getElementById(id),fmt=n=>Number.isFinite(n)?n.toLocaleString(undefined,{maximumFractionDigits:5}):'—';
@@ -69,9 +70,10 @@ function connect(){
  status('Connecting…');diag('Opening secure WebSocket: '+ENDPOINT);
  try{ws=new WebSocket(ENDPOINT)}catch(e){status('Browser blocked WebSocket');diag(e.message);return}
  const timer=setTimeout(()=>{if(ws&&ws.readyState!==1){status('Connection timeout');diag('No WebSocket handshake within 15 seconds. Try another network or disable VPN/ad-blocking temporarily.')}},15000);
- ws.onopen=async()=>{clearTimeout(timer);reconnectDelay=1500;status('Connected · loading symbols',true);diag('WebSocket handshake successful. Requesting active_symbols…');try{await loadSymbols()}catch(e){status('Symbol request failed');diag(e.message)};};
- ws.onmessage=ev=>{let d;try{d=JSON.parse(ev.data)}catch{return}
+ ws.onopen=async()=>{clearTimeout(timer);reconnectDelay=1500;lastMessageAt=Date.now();status('Connected · loading symbols',true);diag('WebSocket handshake successful. Requesting active_symbols…');if(watchdogTimer)clearInterval(watchdogTimer);if(heartbeatTimer)clearInterval(heartbeatTimer);heartbeatTimer=setInterval(()=>{if(ws?.readyState===1)request({ping:1},10000).catch(()=>{})},25000);watchdogTimer=setInterval(()=>{if(ws?.readyState===1&&Date.now()-lastMessageAt>65000){diag('No server messages for 65 seconds. Reopening stale connection…');try{ws.close()}catch(e){}}},10000);try{await loadSymbols()}catch(e){status('Symbol request failed');diag(e.message)};};
+ ws.onmessage=ev=>{lastMessageAt=Date.now();let d;try{d=JSON.parse(ev.data)}catch{return}
  if(d.msg_type==='tick'&&d.tick){
+   lastTickAt=Date.now();
    const sid=d.subscription?.id;
    if((!activeTickSymbol||activeTickSymbol===$('market').value)&&(!sid||!activeTickSubscriptionId||sid===activeTickSubscriptionId))showTick(d.tick);
  }
@@ -79,7 +81,7 @@ function connect(){
  if(d.msg_type==='history'&&d.history?.prices?.length){const n=d.history.prices.length-1;showTick({quote:d.history.prices[n],epoch:d.history.times?.[n]})}
  };
  ws.onerror=()=>{status('WebSocket error');diag('Browser reported a WebSocket handshake/network error. This occurs before Deriv can return a market-data response. Check network restrictions, VPN, Private DNS or browser extensions.')};
- ws.onclose=e=>{clearTimeout(timer);activeTickSubscriptionId=null;for(const p of pending.values())p.reject(Error('Socket closed'));pending.clear();if(!manualClose){status('Disconnected · reconnecting');diag('Connection lost (code '+e.code+'). Reconnecting automatically…');if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{if(!manualClose)connect()},reconnectDelay);reconnectDelay=Math.min(30000,reconnectDelay*2)}else{status('Disconnected');diag('Socket closed.')}};
+ ws.onclose=e=>{clearTimeout(timer);if(watchdogTimer){clearInterval(watchdogTimer);watchdogTimer=null}if(heartbeatTimer){clearInterval(heartbeatTimer);heartbeatTimer=null}activeTickSubscriptionId=null;for(const p of pending.values())p.reject(Error('Socket closed'));pending.clear();if(!manualClose){status('Disconnected · reconnecting');diag('Connection lost (code '+e.code+'). Reconnecting automatically…');if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{if(!manualClose)connect()},reconnectDelay);reconnectDelay=Math.min(30000,reconnectDelay*2)}else{status('Disconnected');diag('Socket closed.')}};
 }
 async function loadSymbols(){
  // The current Deriv public API renamed symbol/display_name to
@@ -145,36 +147,50 @@ const SCAN_TFS=[60,300,900,1800,7200,10800,14400];
 const tfName=g=>({60:'1m',300:'5m',900:'15m',1800:'30m',7200:'2h',10800:'3h',14400:'4h'}[g]||g+'s');
 function structureStats(cs){
  if(!cs||cs.length<50)return {score:0,trend:'Insufficient data',detail:'Need at least 50 candles'};
- const a=cs.slice(-120), highs=[],lows=[];
+ const a=cs.slice(-120),highs=[],lows=[];
  for(let i=2;i<a.length-2;i++){
   if(a[i].high>a[i-1].high&&a[i].high>a[i-2].high&&a[i].high>=a[i+1].high&&a[i].high>=a[i+2].high)highs.push({i,p:a[i].high});
   if(a[i].low<a[i-1].low&&a[i].low<a[i-2].low&&a[i].low<=a[i+1].low&&a[i].low<=a[i+2].low)lows.push({i,p:a[i].low});
  }
- const last=a.at(-1),atrv=atr(a),recent=a.slice(-60),tol=Math.max(atrv*.25,last.close*.00015);
- const zones=[];
+ const last=a.at(-1),atrv=atr(a),recent=a.slice(-60),tol=Math.max(atrv*.25,last.close*.00015),zones=[];
  for(const p of [...highs.map(x=>({p:x.p,t:'R'})),...lows.map(x=>({p:x.p,t:'S'}))]){
   let z=zones.find(v=>v.t===p.t&&Math.abs(v.p-p.p)<=tol*2);
-  if(z){z.p=(z.p*z.n+p.p)/(z.n+1);z.n++}else zones.push({p:p.p,t:p.t,n:1,touches:0});
+  if(z){z.p=(z.p*z.n+p.p)/(z.n+1);z.n++}else zones.push({p:p.p,t:p.t,n:1,touches:0,reactions:0});
  }
  for(const z of zones)for(let i=0;i<recent.length;i++){
-  const c=recent[i];if(Math.abs((z.t==='R'?c.high:c.low)-z.p)<=tol&&Math.abs(c.close-z.p)>tol*.35)z.touches++;
+  const c=recent[i],edge=z.t==='R'?c.high:c.low;
+  if(Math.abs(edge-z.p)<=tol&&Math.abs(c.close-z.p)>tol*.35){z.touches++;z.reactions+=Math.min(2,Math.abs(c.close-z.p)/Math.max(atrv,1e-10))}
  }
- const meaningful=zones.filter(z=>z.touches>0),touches=meaningful.reduce((s,z)=>s+Math.min(z.touches,4),0);
- let hh=0,ll=0,lh=0,hl=0;
- if(highs.length>=2){for(let i=1;i<highs.length;i++){if(highs[i].p>highs[i-1].p)hh++;else lh++}}
- if(lows.length>=2){for(let i=1;i<lows.length;i++){if(lows[i].p>lows[i-1].p)hl++;else ll++}}
- const swingN=Math.max(1,hh+lh+hl+ll),directional=Math.max(hh+hl,lh+ll)/swingN;
- let breaks=0,falseBreaks=0,retests=0;
- for(let i=Math.max(20,a.length-50);i<a.length-2;i++){
-  const prior=a.slice(Math.max(0,i-20),i),rh=Math.max(...prior.map(c=>c.high)),rl=Math.min(...prior.map(c=>c.low)),c=a[i],next=a.slice(i+1,Math.min(a.length,i+4));
-  if(c.close>rh||c.close<rl){breaks++;const up=c.close>rh,held=next.some(n=>up?n.low<=rh+tol&&n.close>rh:n.high>=rl-tol&&n.close<rl);if(held)retests++;else if(next.length>=2)falseBreaks++}
+ const touchCount=zones.reduce((n,z)=>n+Math.min(z.touches,4),0);
+ const srScore=Math.min(100,touchCount*8+zones.filter(z=>z.touches>=2).length*7);
+ let hh=0,lh=0,hl=0,ll=0;
+ for(let i=1;i<highs.length;i++){if(highs[i].p>highs[i-1].p)hh++;else lh++}
+ for(let i=1;i<lows.length;i++){if(lows[i].p>lows[i-1].p)hl++;else ll++}
+ const up=hh+hl,down=lh+ll,swingTotal=Math.max(1,up+down);
+ const swingScore=100*Math.max(up,down)/swingTotal;
+ let breaks=0,heldRetests=0,falseBreaks=0,breakStrength=0;
+ for(let i=Math.max(25,a.length-55);i<a.length-4;i++){
+  const prior=a.slice(Math.max(0,i-20),i),rh=Math.max(...prior.map(c=>c.high)),rl=Math.min(...prior.map(c=>c.low)),c=a[i],range=Math.max(c.high-c.low,1e-10),body=Math.abs(c.close-c.open);
+  const upBreak=c.close>rh+atrv*.08,downBreak=c.close<rl-atrv*.08;
+  if(!upBreak&&!downBreak)continue;
+  breaks++;const bullish=upBreak,level=bullish?rh:rl;
+  breakStrength+=Math.min(100,Math.max(0,((Math.abs(c.close-level)/Math.max(atrv,1e-10))*.55+(body/range)*.45)*100));
+  const future=a.slice(i+1,Math.min(a.length,i+5));
+  const retest=future.find(n=>bullish?n.low<=level+atrv*.25&&n.close>level:n.high>=level-atrv*.25&&n.close<level);
+  if(retest)heldRetests++;
+  else if(future.length>=3&&future.some(n=>bullish?n.close<level-atrv*.15:n.close>level+atrv*.15))falseBreaks++;
  }
- const respect=Math.min(100,touches*9),swings=directional*100,breakQuality=breaks?retests/breaks*100:55,cleanRetests=breaks?retests/breaks*100:50,falseRate=breaks?falseBreaks/breaks:0;
- const noiseRatio=atrv?((Math.max(...recent.map(c=>c.high))-Math.min(...recent.map(c=>c.low)))/(atrv*Math.sqrt(recent.length))):0;
- const noisePenalty=Math.min(100,Math.max(0,(1.25-noiseRatio)*65));
- const score=Math.round(Math.max(0,Math.min(100,respect*.25+swings*.20+breakQuality*.20+cleanRetests*.15+(100-falseRate*100)*.15+noisePenalty*.05)));
- const up=hh+hl,down=lh+ll,trend=up>down?'Bullish structure':down>up?'Bearish structure':'Mixed / ranging';
- return {score,trend,detail:'S/R touches '+touches+' · swing sequence '+(up+down)+' · breakout retests '+retests+'/'+breaks+' · false-break rate '+Math.round(falseRate*100)+'%',last:last.close,levels:levels(a),metrics:{touches,swings:Math.round(swings),breakQuality:Math.round(breakQuality),falseBreakRate:Math.round(falseRate*100)}};
+ const breakoutScore=breaks?breakStrength/breaks:50;
+ const retestScore=breaks?heldRetests/breaks*100:50;
+ const falseRate=breaks?falseBreaks/breaks:0;
+ const lastC=a.at(-1),range=Math.max(lastC.high-lastC.low,1e-10),body=Math.abs(lastC.close-lastC.open);
+ const bodyRatio=body/range,closeLocation=lastC.close>=lastC.open?(lastC.close-lastC.low)/range:(lastC.high-lastC.close)/range;
+ const candleScore=Math.min(100,bodyRatio*65+closeLocation*35);
+ const noiseRate=recent.filter((c,i)=>i>0&&((c.high-c.low)>atrv*2.2)).length/Math.max(1,recent.length-1);
+ const noiseScore=Math.max(0,100-noiseRate*180-Math.min(40,falseRate*100));
+ const score=Math.round(swingScore*.25+srScore*.20+breakoutScore*.20+retestScore*.15+candleScore*.10+noiseScore*.10);
+ const trend=up>down?'Bullish structure':down>up?'Bearish structure':'Mixed / ranging';
+ return {score,trend,detail:'Swing consistency '+Math.round(swingScore)+' · S/R '+Math.round(srScore)+' · breakout '+Math.round(breakoutScore)+' · retest '+Math.round(retestScore)+' · candle '+Math.round(candleScore)+' · noise '+Math.round(noiseScore),last:last.close,levels:levels(a),metrics:{swingConsistency:Math.round(swingScore),supportResistance:Math.round(srScore),breakoutQuality:Math.round(breakoutScore),retestBehaviour:Math.round(retestScore),candleConfirmation:Math.round(candleScore),noiseControl:Math.round(noiseScore),falseBreakRate:Math.round(falseRate*100)}};
 }
 function candleConfirmation(cs,granularity){
  if(!cs||cs.length<3)return {side:'NONE',pattern:'Insufficient fully closed candles',closed:false};
@@ -190,6 +206,78 @@ function candleConfirmation(cs,granularity){
  if(bullEngulf||bullPin||strongBull)return {side:'BULLISH',pattern:bullEngulf?'Bullish engulfing':bullPin?'Bullish rejection pin bar':'Strong bullish close',closed:true,candle:c};
  if(bearEngulf||bearPin||strongBear)return {side:'BEARISH',pattern:bearEngulf?'Bearish engulfing':bearPin?'Bearish rejection pin bar':'Strong bearish close',closed:true,candle:c};
  return {side:'NONE',pattern:'No qualifying closed confirmation candle',closed:true,candle:c};
+}
+
+function confirmedPivots(cs,endIndex){
+ const highs=[],lows=[];
+ for(let i=2;i<=endIndex-2;i++){
+  if(cs[i].high>cs[i-1].high&&cs[i].high>cs[i-2].high&&cs[i].high>=cs[i+1].high&&cs[i].high>=cs[i+2].high)highs.push({i,p:cs[i].high});
+  if(cs[i].low<cs[i-1].low&&cs[i].low<cs[i-2].low&&cs[i].low<=cs[i+1].low&&cs[i].low<=cs[i+2].low)lows.push({i,p:cs[i].low});
+ }
+ return {highs,lows};
+}
+function priorStructureBias(cs,endIndex){
+ const p=confirmedPivots(cs,endIndex),h=p.highs.slice(-2),l=p.lows.slice(-2);
+ if(h.length<2||l.length<2)return 'RANGE';
+ if(h[1].p>h[0].p&&l[1].p>l[0].p)return 'BULLISH';
+ if(h[1].p<h[0].p&&l[1].p<l[0].p)return 'BEARISH';
+ return 'RANGE';
+}
+function detectRetestSetup(cs,granularity){
+ const empty={side:'NONE',type:'',pattern:'No confirmed breakout → retest → confirmation sequence',reason:'Waiting for a confirmed BOS/CHoCH breakout.'};
+ if(!cs||cs.length<55)return {...empty,reason:'Insufficient closed-candle history.'};
+ const now=Math.floor(Date.now()/1000),a=cs.filter(c=>c.epoch+granularity<=now);
+ if(a.length<55)return {...empty,reason:'Waiting for sufficient fully closed candles.'};
+ const lastIndex=a.length-1,firstBreak=Math.max(8,lastIndex-20),maxAge=Math.max(1,Math.min(5,Math.ceil(300/granularity)));
+ let candidate=null;
+ for(let i=firstBreak;i<=lastIndex-2;i++){
+  const prefix=a.slice(0,i),p=confirmedPivots(prefix,prefix.length-1),ph=p.highs.at(-1),pl=p.lows.at(-1);
+  if(!ph||!pl)continue;
+  const c=a[i],prev=a[i-1],localAtr=atr(a.slice(Math.max(0,i-20),i+1));
+  if(!Number.isFinite(localAtr)||localAtr<=0)continue;
+  const buffer=localAtr*.10,zone=localAtr*.25;
+  let side=null,level=null;
+  if(c.close>ph.p+buffer&&prev.close<=ph.p){side='BUY';level=ph.p}
+  else if(c.close<pl.p-buffer&&prev.close>=pl.p){side='SELL';level=pl.p}
+  if(!side)continue;
+  const bias=priorStructureBias(prefix,prefix.length-1);
+  const type=(side==='BUY'&&bias==='BEARISH')||(side==='SELL'&&bias==='BULLISH')?'CHoCH':'BOS';
+  let retestIndex=-1,invalid=false;
+  for(let j=i+1;j<=Math.min(lastIndex,i+10);j++){
+   const r=a[j];
+   if(side==='BUY'){
+    if(r.close<level-zone){invalid=true;break}
+    if(r.low<=level+zone&&r.high>=level-zone&&r.close>=level-zone){retestIndex=j;break}
+   }else{
+    if(r.close>level+zone){invalid=true;break}
+    if(r.high>=level-zone&&r.low<=level+zone&&r.close<=level+zone){retestIndex=j;break}
+   }
+  }
+  if(invalid||retestIndex<0||retestIndex>=lastIndex)continue;
+  const confirmIndex=retestIndex+1,confirmation=a[confirmIndex],r=a[retestIndex];
+  const range=Math.max(confirmation.high-confirmation.low,1e-12),body=Math.abs(confirmation.close-confirmation.open);
+  const upper=confirmation.high-Math.max(confirmation.open,confirmation.close),lower=Math.min(confirmation.open,confirmation.close)-confirmation.low;
+  const bull=confirmation.close>confirmation.open&&(body/range>=.55||(lower>=body*1.8&&upper<=body));
+  const bear=confirmation.close<confirmation.open&&(body/range>=.55||(upper>=body*1.8&&lower<=body));
+  if(!(side==='BUY'?bull&&confirmation.close>level:bear&&confirmation.close<level))continue;
+  let laterInvalid=false;
+  for(let k=confirmIndex+1;k<=lastIndex;k++){
+   if(side==='BUY'?a[k].close<level-zone:a[k].close>level+zone){laterInvalid=true;break}
+  }
+  if(laterInvalid)continue;
+  const ageBars=lastIndex-confirmIndex;
+  if(ageBars>maxAge)continue;
+  const drift=side==='BUY'?a[lastIndex].close-confirmation.close:confirmation.close-a[lastIndex].close;
+  if(drift>localAtr*.5)continue;
+  candidate={side,type,level,breakout:a[i],retest:r,confirmation,atr:localAtr,pattern:(side==='BUY'?'Bullish':'Bearish')+' retest rejection candle',barsAfterBreak:confirmIndex-i,ageBars};
+ }
+ if(candidate)return candidate;
+ return {...empty,reason:'No fresh setup. Confirmation must be recent, price must not have run more than 0.5 ATR, and invalidated or expired setups are rejected.'};
+}
+function alignmentScore(side,biases,setupType='BOS'){
+ const wanted=side==='BUY'?'BULLISH':'BEARISH',opposing=setupType==='CHoCH'?40:0;
+ const values=biases.map(b=>b===wanted?100:(b==='NEUTRAL'||b==='Mixed / ranging'?50:opposing));
+ return values.length?values.reduce((a,b)=>a+b,0)/values.length:50;
 }
 function recordSignal(signal){
  const key=[signal.symbol,signal.side,signal.tf,signal.epoch].join('|');
@@ -213,6 +301,41 @@ function evaluatePendingSignals(symbol,tf,candles){
  }
  if(changed||signalHistory.length)saveSignalHistory();
 }
+async function getHistoryCandles(sym,granularity,count){
+ const d=await request({ticks_history:sym,count,end:'latest',style:'candles',granularity});
+ const now=Math.floor(Date.now()/1000);
+ return (d.candles||[]).map(c=>({epoch:+c.epoch,open:+c.open,high:+c.high,low:+c.low,close:+c.close}))
+ .filter(c=>[c.epoch,c.open,c.high,c.low,c.close].every(Number.isFinite)&&c.epoch+granularity<=now)
+ .sort((a,b)=>a.epoch-b.epoch);
+}
+async function researchDonchian(){
+ if(scanRunning||!ws||ws.readyState!==1){$('researchSummary').textContent='Connect to Deriv first. Wait until any active scan finishes.';return}
+ if(!symbols.length){await loadSymbols();if(!symbols.length)return}
+ if(!window.VolatilityStrategy){$('researchSummary').textContent='Strategy engine failed to load.';return}
+ scanRunning=true;$('research').disabled=true;$('scanAll').disabled=true;$('analyze').disabled=true;
+ const rows=[];let failed=0;$('researchResults').innerHTML='';
+ $('researchSummary').textContent='Downloading up to 1,000 completed 1H candles and 260 completed 4H candles per index…';
+ try{
+  for(let n=0;n<symbols.length;n++){
+   const market=symbols[n];
+   try{
+    const entry=await getHistoryCandles(market.symbol,3600,1000);
+    const trend=await getHistoryCandles(market.symbol,14400,260);
+    const result=window.VolatilityStrategy.backtest({entryCandles:entry,trendCandles:trend});
+    rows.push({name:market.display_name||market.symbol,symbol:market.symbol,...result.summary,bars:entry.length,trendBars:trend.length});
+   }catch(e){failed++;rows.push({name:market.display_name||market.symbol,symbol:market.symbol,error:e.message,trades:0,bars:0,trendBars:0})}
+   $('researchSummary').textContent='Testing '+(n+1)+'/'+symbols.length+' markets · '+failed+' data failures. This is a historical simulation, not a live signal.';
+  }
+  rows.sort((a,b)=>(b.expectancyR||0)-(a.expectancyR||0));
+  const fmtR=n=>Number.isFinite(n)?n.toFixed(2):'∞';
+  $('researchResults').innerHTML='<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th align="left">Market</th><th>Trades</th><th>Win %</th><th>PF</th><th>Expectancy (R)</th><th>Net R</th><th>Max DD (R)</th></tr></thead><tbody>'+
+   rows.map(x=>'<tr style="border-top:1px solid #263550"><td style="padding:9px 5px">'+String(x.name).replaceAll('&','&amp;').replaceAll('<','&lt;')+'</td><td align="center">'+x.trades+'</td><td align="center">'+(x.winRate||0).toFixed(1)+'</td><td align="center">'+(x.trades?fmtR(x.profitFactor):'—')+'</td><td align="center">'+(x.trades?fmtR(x.expectancyR):'—')+'</td><td align="center">'+(x.trades?fmtR(x.netR):'—')+'</td><td align="center">'+(x.trades?fmtR(x.maxDrawdownR):'—')+'</td></tr>').join('')+'</tbody></table>';
+  const qualified=rows.filter(x=>x.trades>=100&&x.expectancyR>0&&x.profitFactor>1.2);
+  $('researchSummary').textContent='Research complete · '+rows.length+' indices · '+failed+' data failures. Preliminary candidates passing ≥100 trades, positive net expectancy and PF >1.20: '+qualified.length+'. No market qualifies as proven until it passes a larger sample and out-of-sample/forward testing. Cost proxy: 0.05 ATR per completed trade.';
+  diag('Donchian historical research complete. No orders were placed.');
+ }catch(e){$('researchSummary').textContent='Research stopped: '+e.message;diag(e.message)}
+ finally{scanRunning=false;$('research').disabled=false;$('scanAll').disabled=false;$('analyze').disabled=false}
+}
 async function scanAllMarkets(){
  if(scanRunning)return;
  if(!ws||ws.readyState!==1){diag('Connect to Deriv before scanning all markets.');status('Not connected');return}
@@ -228,17 +351,19 @@ async function scanAllMarkets(){
     if(!ws||ws.readyState!==1)throw Error('Deriv connection lost during scan. Reconnect and scan again.');
     try{
      const candles=await getCandles(market.symbol,tf);evaluatePendingSignals(market.symbol,tfName(tf),candles);
-     const st=structureStats(candles);per.push({tf,name:tfName(tf),...st,candles});
-     const confirm=candleConfirmation(candles,tf);
-     const aligned=(confirm.side==='BULLISH'&&st.trend==='Bullish structure')||(confirm.side==='BEARISH'&&st.trend==='Bearish structure');
-     if(st.score>=65&&aligned&&confirm.closed&&confirm.candle){
-      const last=confirm.candle,av=atr(candles),lv=levels(candles),side=confirm.side==='BULLISH'?'BUY':'SELL';
-      const entry=last.close,stop=side==='BUY'?Math.min(lv.s1,entry-1.5*av):Math.max(lv.r1,entry+1.5*av),risk=Math.abs(entry-stop),target=side==='BUY'?entry+2*risk:entry-2*risk;
-      const sig={name:market.display_name||market.symbol,symbol:market.symbol,side,tf:tfName(tf),score:st.score,pattern:confirm.pattern,entry,stop,target,epoch:last.epoch};
-      if(recordSignal(sig)){newSignals.push(sig)}
-     }
+     const st=structureStats(candles),retest=detectRetestSetup(candles,tf);per.push({tf,name:tfName(tf),...st,candles,setup:retest});
     }catch(e){fail++;per.push({tf,name:tfName(tf),score:0,trend:'Data unavailable',detail:e.message,candles:[]})}
     done++;$('scanSummary').textContent='Scanning '+market.display_name+' · '+done+'/'+total+' timeframe checks · '+fail+' unavailable';
+   }
+   for(const p of per){
+    const setup=p.setup;if(!setup?.confirmation)continue;
+    const mtfScore=alignmentScore(setup.side,per.filter(x=>x.trend!=='Data unavailable'&&x.trend!=='Insufficient data').map(x=>x.trend==='Bullish structure'?'BULLISH':x.trend==='Bearish structure'?'BEARISH':'NEUTRAL'),setup.type);
+    const combinedScore=Math.round(p.score*.6+mtfScore*.4);
+    if(combinedScore<65||mtfScore<40)continue;
+    const last=setup.confirmation,av=atr(p.candles),side=setup.side;
+    const entry=last.close,stop=side==='BUY'?Math.min(setup.retest.low-setup.atr*.20,entry-1.2*av):Math.max(setup.retest.high+setup.atr*.20,entry+1.2*av),risk=Math.abs(entry-stop),target=side==='BUY'?entry+2*risk:entry-2*risk;
+    const sig={name:market.display_name||market.symbol,symbol:market.symbol,side,type:setup.type,level:setup.level,breakoutEpoch:setup.breakout.epoch,retestEpoch:setup.retest.epoch,tf:p.name,score:combinedScore,structureScore:p.score,mtfScore:Math.round(mtfScore),ageBars:setup.ageBars,pattern:setup.pattern,entry,stop,target,epoch:last.epoch};
+    if(recordSignal(sig)){newSignals.push(sig)}
    }
    const valid=per.filter(x=>x.trend!=='Data unavailable'&&x.trend!=='Insufficient data'&&x.candles.length>=55);
    const best=valid.slice().sort((x,y)=>y.score-x.score)[0];
@@ -262,8 +387,8 @@ function renderScan(rows){
 function renderSignals(){
  const pending=signalHistory.filter(s=>s.status==='PENDING').sort((a,b)=>b.score-a.score);
  const buys=pending.filter(s=>s.side==='BUY'),sells=pending.filter(s=>s.side==='SELL');
- $('signalSummary').textContent=pending.length?pending.length+' active confirmed setup(s) · '+signalHistory.filter(s=>s.status!=='PENDING').length+' resolved outcomes':'No active confirmed entries. Signals require a qualifying candle that has closed.';
- const card=s=>'<div class="signal-card '+(s.side==='BUY'?'buy':'sell')+'"><div class="scoreline"><span>'+s.tf+' · Quality '+s.score+'/100</span><b>'+s.side+'</b></div><div class="name">'+s.name+'</div><div class="small">'+s.pattern+' · '+new Date(s.epoch*1000).toLocaleString()+'</div><div class="signal-price"><div>Entry<br><b>'+fmt(s.entry)+'</b></div><div>Stop loss<br><b>'+fmt(s.stop)+'</b></div><div>Target<br><b>'+fmt(s.target)+'</b></div><div>Tracking<br><b>'+s.status+'</b></div></div></div>';
+ $('signalSummary').textContent=pending.length?pending.length+' active retest-confirmed setup(s) · '+signalHistory.filter(s=>s.status!=='PENDING').length+' resolved outcomes':'No active retest-confirmed entries. A BOS/CHoCH breakout, retest and later closed confirmation candle are required.';
+ const card=s=>'<div class="signal-card '+(s.side==='BUY'?'buy':'sell')+'"><div class="scoreline"><span>'+s.tf+' · Quality '+s.score+'/100</span><b>'+s.side+' · '+(s.type||'SETUP')+'</b></div><div class="name">'+s.name+'</div><div class="small">'+s.pattern+' · Level '+fmt(s.level)+' · '+(s.ageBars?('Age '+s.ageBars+' bars · '):'')+new Date(s.epoch*1000).toLocaleString()+'</div><div class="signal-price"><div>Entry<br><b>'+fmt(s.entry)+'</b></div><div>Stop loss<br><b>'+fmt(s.stop)+'</b></div><div>Target<br><b>'+fmt(s.target)+'</b></div><div>Tracking<br><b>'+s.status+'</b></div></div></div>';
  $('buySignals').innerHTML=buys.map(card).join('')||'<div class="small">No active BUY setups.</div>';
  $('sellSignals').innerHTML=sells.map(card).join('')||'<div class="small">No active SELL setups.</div>';
 }
@@ -293,34 +418,36 @@ async function analyze(){
  const bias=eh>ema(hc.slice(-50),50)?'BULLISH':eh<ema(hc.slice(-50),50)?'BEARISH':'NEUTRAL';
  const midBias=em>ema(mc.slice(-50),50)?'BULLISH':em<ema(mc.slice(-50),50)?'BEARISH':'NEUTRAL';
  const fastBias=ef>es?'BULLISH':ef<es?'BEARISH':'NEUTRAL';
- const confirm=candleConfirmation(fast,gs[0]),st=structureStats(fast);
+ const retest=detectRetestSetup(fast,gs[0]),st=structureStats(fast);const confirm=retest.confirmation?{side:retest.side==='BUY'?'BULLISH':'BEARISH',pattern:retest.pattern,closed:true,candle:retest.confirmation}:{side:'NONE',pattern:retest.reason,closed:true};
  const nearRes=(lv.r1-last)<av*.45&&(lv.r1-last)>=0,nearSup=(last-lv.s1)<av*.45&&(last-lv.s1)>=0;
- const long=confirm.side==='BULLISH'&&bias==='BULLISH'&&midBias!=='BEARISH'&&fastBias==='BULLISH'&&!nearRes&&rv<75;
- const short=confirm.side==='BEARISH'&&bias==='BEARISH'&&midBias!=='BULLISH'&&fastBias==='BEARISH'&&!nearSup&&rv>25;
- const decision=long?'BUY CONFIRMED':short?'SELL CONFIRMED':'NO TRADE';
- const stop=long?Math.min(lv.s1,last-1.5*av):short?Math.max(lv.r1,last+1.5*av):NaN;
- const target=long?last+2*(last-stop):short?last-2*(stop-last):NaN;
- const why=['Higher timeframe bias: '+bias,'Middle timeframe bias: '+midBias,'Entry timeframe bias: '+fastBias,'Closed candle: '+confirm.pattern,'Structure quality: '+st.score+'/100 ('+st.trend+')','RSI(14): '+rv.toFixed(1),'Nearest resistance: '+fmt(lv.r1)+' · nearest support: '+fmt(lv.s1)];
- if(!confirm.closed||confirm.side==='NONE')why.push('No entry: wait for a qualifying bullish or bearish candle to CLOSE.');
- if(confirm.side==='BULLISH'&&!long)why.push('Bullish candle detected, but higher-timeframe alignment, resistance clearance or RSI filter did not confirm a BUY.');
- if(confirm.side==='BEARISH'&&!short)why.push('Bearish candle detected, but higher-timeframe alignment, support clearance or RSI filter did not confirm a SELL.');
+ const mtfScore=alignmentScore(retest.side,[bias,midBias,fastBias],retest.type),combinedScore=Math.round(st.score*.6+mtfScore*.4);
+ const long=retest.side==='BUY'&&combinedScore>=65&&mtfScore>=40&&!nearRes&&rv<75;
+ const short=retest.side==='SELL'&&combinedScore>=65&&mtfScore>=40&&!nearSup&&rv>25;
+ const decision=long?'BUY RETEST CONFIRMED':short?'SELL RETEST CONFIRMED':'NO TRADE';
+ const entryPrice=retest.confirmation?.close??last;
+ const stop=long?Math.min(retest.retest.low-retest.atr*.20,entryPrice-1.2*av):short?Math.max(retest.retest.high+retest.atr*.20,entryPrice+1.2*av):NaN;
+ const target=long?entryPrice+2*(entryPrice-stop):short?entryPrice-2*(stop-entryPrice):NaN;
+ const why=['Higher timeframe bias: '+bias,'Middle timeframe bias: '+midBias,'Entry timeframe bias: '+fastBias,'Closed candle: '+confirm.pattern,'Structure quality: '+st.score+'/100 ('+st.trend+')','Multi-timeframe alignment: '+Math.round(mtfScore)+'/100 · combined setup score: '+combinedScore+'/100','RSI(14): '+rv.toFixed(1),'Nearest resistance: '+fmt(lv.r1)+' · nearest support: '+fmt(lv.s1)];
+ if(!retest.confirmation)why.push(retest.reason);else why.push(retest.type+' confirmed · breakout level '+fmt(retest.level)+' · retest completed after '+retest.barsAfterBreak+' candles.');
+ if(confirm.side==='BULLISH'&&!long)why.push('Bullish setup did not pass the combined quality, resistance or RSI filters.');
+ if(confirm.side==='BEARISH'&&!short)why.push('Bearish setup did not pass the combined quality, support or RSI filters.');
  if(nearRes)why.push('Price is too close to resistance for a fresh BUY.');
  if(nearSup)why.push('Price is too close to support for a fresh SELL.');
  $('symbol').textContent=sym;$('decision').textContent=decision;$('decision').className='decision '+(long?'green':short?'red':'amber');
- $('confidence').textContent='Structure '+st.score+'/100 · closed-candle confirmation required';
+ $('confidence').textContent='Setup '+combinedScore+'/100 · MTF '+Math.round(mtfScore)+'/100 · '+(retest.type||'No active setup');
  $('bias').textContent=bias;$('biasnote').textContent='Mid: '+midBias+' · Entry: '+fastBias;
  $('rr').textContent=long||short?'1 : 2 planned':'No trade plan';
- $('entry').textContent=long||short?fmt(last):'Wait for confirmation';
- $('entrynote').textContent=long||short?'Confirmed '+confirm.pattern+' on a closed candle.':confirm.pattern;
+ $('entry').textContent=long||short?fmt(entryPrice):'Wait for retest';
+ $('entrynote').textContent=long||short?retest.type+' · Breakout → retest → closed confirmation.':retest.reason;
  $('stop').textContent=long||short?fmt(stop):'—';$('target').textContent=long||short?'Target: '+fmt(target):'—';
  for(const [id,val] of Object.entries({r2:lv.r2,r1:lv.r1,pivot:lv.p,s1:lv.s1,s2:lv.s2,last}))$(id).textContent=fmt(val);
  $('reasons').innerHTML=why.map(x=>'<div class="reason">'+x.replaceAll('&','&amp;').replaceAll('<','&lt;')+'</div>').join('');
- $('chartnote').textContent='Latest fully closed '+(gs[0]/60)+'-minute candles · '+fast.length+' bars';draw(fast);
+ $('chartnote').textContent='Latest fully closed '+(gs[0]/60)+'-minute candles · '+fast.length+' bars · BOS/CHoCH retest entries';draw(fast);
  status('Analysis updated',true);diag('Closed-candle analysis complete for '+sym+' at '+new Date().toLocaleString());
  if(alertOn&&(long||short)&&decision!==lastAlert){if('Notification'in window&&Notification.permission==='granted')new Notification('Volatility AI: '+decision,{body:sym+' · '+confirm.pattern+' · '+fmt(last)});lastAlert=decision}
  }catch(e){status('Analysis failed');diag(e.message)}finally{$('analyze').disabled=false}
 }
-$('connect').onclick=connect;$('analyze').onclick=analyze;$('scanAll').onclick=scanAllMarkets;$('background').onclick=toggleBackgroundScanner;$('market').onchange=async()=>{clearAnalysis();const sym=$('market').value;$('price').textContent='Switching to '+sym+'…';if(ws?.readyState===1){await subscribeTicks();if($('market').value===sym)await analyze()}else{$('price').textContent='Connect to load live price';}};$('style').onchange=()=>{if($('market').value)analyze()};$('alerts').onclick=async()=>{if(!('Notification'in window)){alert('Browser notifications are not supported.');return}const p=await Notification.requestPermission();alertOn=p==='granted';$('alerts').textContent=alertOn?'Alerts enabled':'Enable signal alerts'};
+$('connect').onclick=connect;$('research').onclick=researchDonchian;$('analyze').onclick=analyze;$('scanAll').onclick=scanAllMarkets;$('background').onclick=toggleBackgroundScanner;$('market').onchange=async()=>{clearAnalysis();const sym=$('market').value;$('price').textContent='Switching to '+sym+'…';if(ws?.readyState===1){await subscribeTicks();if($('market').value===sym)await analyze()}else{$('price').textContent='Connect to load live price';}};$('style').onchange=()=>{if($('market').value)analyze()};$('alerts').onclick=async()=>{if(!('Notification'in window)){alert('Browser notifications are not supported.');return}const p=await Notification.requestPermission();alertOn=p==='granted';$('alerts').textContent=alertOn?'Alerts enabled':'Enable signal alerts'};
 renderPerformance();renderSignals();window.addEventListener('resize',()=>{const g=tfSet();if(candlesByTf[g[0]])draw(candlesByTf[g[0]])});
 })();
 </script></body></html>
