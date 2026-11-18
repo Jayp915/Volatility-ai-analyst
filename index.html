@@ -69,7 +69,7 @@ function connect(){
  status('Connecting…');diag('Opening secure WebSocket: '+ENDPOINT);
  try{ws=new WebSocket(ENDPOINT)}catch(e){status('Browser blocked WebSocket');diag(e.message);return}
  const timer=setTimeout(()=>{if(ws&&ws.readyState!==1){status('Connection timeout');diag('No WebSocket handshake within 15 seconds. Try another network or disable VPN/ad-blocking temporarily.')}},15000);
- ws.onopen=async()=>{clearTimeout(timer);reconnectDelay=1500;lastMessageAt=Date.now();status('Connected · loading symbols',true);diag('WebSocket handshake successful. Requesting active_symbols…');if(watchdogTimer)clearInterval(watchdogTimer);if(heartbeatTimer)clearInterval(heartbeatTimer);heartbeatTimer=setInterval(()=>{if(ws?.readyState===1)request({time:1},10000).catch(()=>{})},25000);watchdogTimer=setInterval(()=>{if(ws?.readyState===1&&Date.now()-lastMessageAt>65000){diag('No server messages for 65 seconds. Reopening stale connection…');try{ws.close()}catch(e){}}},10000);try{await loadSymbols()}catch(e){status('Symbol request failed');diag(e.message)};};
+ ws.onopen=async()=>{clearTimeout(timer);reconnectDelay=1500;lastMessageAt=Date.now();status('Connected · loading symbols',true);diag('WebSocket handshake successful. Requesting active_symbols…');if(watchdogTimer)clearInterval(watchdogTimer);if(heartbeatTimer)clearInterval(heartbeatTimer);heartbeatTimer=setInterval(()=>{if(ws?.readyState===1)request({ping:1},10000).catch(()=>{})},25000);watchdogTimer=setInterval(()=>{if(ws?.readyState===1&&Date.now()-lastMessageAt>65000){diag('No server messages for 65 seconds. Reopening stale connection…');try{ws.close()}catch(e){}}},10000);try{await loadSymbols()}catch(e){status('Symbol request failed');diag(e.message)};};
  ws.onmessage=ev=>{lastMessageAt=Date.now();let d;try{d=JSON.parse(ev.data)}catch{return}
  if(d.msg_type==='tick'&&d.tick){
    lastTickAt=Date.now();
@@ -146,36 +146,50 @@ const SCAN_TFS=[60,300,900,1800,7200,10800,14400];
 const tfName=g=>({60:'1m',300:'5m',900:'15m',1800:'30m',7200:'2h',10800:'3h',14400:'4h'}[g]||g+'s');
 function structureStats(cs){
  if(!cs||cs.length<50)return {score:0,trend:'Insufficient data',detail:'Need at least 50 candles'};
- const a=cs.slice(-120), highs=[],lows=[];
+ const a=cs.slice(-120),highs=[],lows=[];
  for(let i=2;i<a.length-2;i++){
   if(a[i].high>a[i-1].high&&a[i].high>a[i-2].high&&a[i].high>=a[i+1].high&&a[i].high>=a[i+2].high)highs.push({i,p:a[i].high});
   if(a[i].low<a[i-1].low&&a[i].low<a[i-2].low&&a[i].low<=a[i+1].low&&a[i].low<=a[i+2].low)lows.push({i,p:a[i].low});
  }
- const last=a.at(-1),atrv=atr(a),recent=a.slice(-60),tol=Math.max(atrv*.25,last.close*.00015);
- const zones=[];
+ const last=a.at(-1),atrv=atr(a),recent=a.slice(-60),tol=Math.max(atrv*.25,last.close*.00015),zones=[];
  for(const p of [...highs.map(x=>({p:x.p,t:'R'})),...lows.map(x=>({p:x.p,t:'S'}))]){
   let z=zones.find(v=>v.t===p.t&&Math.abs(v.p-p.p)<=tol*2);
-  if(z){z.p=(z.p*z.n+p.p)/(z.n+1);z.n++}else zones.push({p:p.p,t:p.t,n:1,touches:0});
+  if(z){z.p=(z.p*z.n+p.p)/(z.n+1);z.n++}else zones.push({p:p.p,t:p.t,n:1,touches:0,reactions:0});
  }
  for(const z of zones)for(let i=0;i<recent.length;i++){
-  const c=recent[i];if(Math.abs((z.t==='R'?c.high:c.low)-z.p)<=tol&&Math.abs(c.close-z.p)>tol*.35)z.touches++;
+  const c=recent[i],edge=z.t==='R'?c.high:c.low;
+  if(Math.abs(edge-z.p)<=tol&&Math.abs(c.close-z.p)>tol*.35){z.touches++;z.reactions+=Math.min(2,Math.abs(c.close-z.p)/Math.max(atrv,1e-10))}
  }
- const meaningful=zones.filter(z=>z.touches>0),touches=meaningful.reduce((s,z)=>s+Math.min(z.touches,4),0);
- let hh=0,ll=0,lh=0,hl=0;
- if(highs.length>=2){for(let i=1;i<highs.length;i++){if(highs[i].p>highs[i-1].p)hh++;else lh++}}
- if(lows.length>=2){for(let i=1;i<lows.length;i++){if(lows[i].p>lows[i-1].p)hl++;else ll++}}
- const swingN=Math.max(1,hh+lh+hl+ll),directional=Math.max(hh+hl,lh+ll)/swingN;
- let breaks=0,falseBreaks=0,retests=0;
- for(let i=Math.max(20,a.length-50);i<a.length-2;i++){
-  const prior=a.slice(Math.max(0,i-20),i),rh=Math.max(...prior.map(c=>c.high)),rl=Math.min(...prior.map(c=>c.low)),c=a[i],next=a.slice(i+1,Math.min(a.length,i+4));
-  if(c.close>rh||c.close<rl){breaks++;const up=c.close>rh,held=next.some(n=>up?n.low<=rh+tol&&n.close>rh:n.high>=rl-tol&&n.close<rl);if(held)retests++;else if(next.length>=2)falseBreaks++}
+ const touchCount=zones.reduce((n,z)=>n+Math.min(z.touches,4),0);
+ const srScore=Math.min(100,touchCount*8+zones.filter(z=>z.touches>=2).length*7);
+ let hh=0,lh=0,hl=0,ll=0;
+ for(let i=1;i<highs.length;i++){if(highs[i].p>highs[i-1].p)hh++;else lh++}
+ for(let i=1;i<lows.length;i++){if(lows[i].p>lows[i-1].p)hl++;else ll++}
+ const up=hh+hl,down=lh+ll,swingTotal=Math.max(1,up+down);
+ const swingScore=100*Math.max(up,down)/swingTotal;
+ let breaks=0,heldRetests=0,falseBreaks=0,breakStrength=0;
+ for(let i=Math.max(25,a.length-55);i<a.length-4;i++){
+  const prior=a.slice(Math.max(0,i-20),i),rh=Math.max(...prior.map(c=>c.high)),rl=Math.min(...prior.map(c=>c.low)),c=a[i],range=Math.max(c.high-c.low,1e-10),body=Math.abs(c.close-c.open);
+  const upBreak=c.close>rh+atrv*.08,downBreak=c.close<rl-atrv*.08;
+  if(!upBreak&&!downBreak)continue;
+  breaks++;const bullish=upBreak,level=bullish?rh:rl;
+  breakStrength+=Math.min(100,Math.max(0,((Math.abs(c.close-level)/Math.max(atrv,1e-10))*.55+(body/range)*.45)*100));
+  const future=a.slice(i+1,Math.min(a.length,i+5));
+  const retest=future.find(n=>bullish?n.low<=level+atrv*.25&&n.close>level:n.high>=level-atrv*.25&&n.close<level);
+  if(retest)heldRetests++;
+  else if(future.length>=3&&future.some(n=>bullish?n.close<level-atrv*.15:n.close>level+atrv*.15))falseBreaks++;
  }
- const respect=Math.min(100,touches*9),swings=directional*100,breakQuality=breaks?retests/breaks*100:55,cleanRetests=breaks?retests/breaks*100:50,falseRate=breaks?falseBreaks/breaks:0;
- const noiseRatio=atrv?((Math.max(...recent.map(c=>c.high))-Math.min(...recent.map(c=>c.low)))/(atrv*Math.sqrt(recent.length))):0;
- const noisePenalty=Math.min(100,Math.max(0,(1.25-noiseRatio)*65));
- const score=Math.round(Math.max(0,Math.min(100,respect*.25+swings*.20+breakQuality*.20+cleanRetests*.15+(100-falseRate*100)*.15+noisePenalty*.05)));
- const up=hh+hl,down=lh+ll,trend=up>down?'Bullish structure':down>up?'Bearish structure':'Mixed / ranging';
- return {score,trend,detail:'S/R touches '+touches+' · swing sequence '+(up+down)+' · breakout retests '+retests+'/'+breaks+' · false-break rate '+Math.round(falseRate*100)+'%',last:last.close,levels:levels(a),metrics:{touches,swings:Math.round(swings),breakQuality:Math.round(breakQuality),falseBreakRate:Math.round(falseRate*100)}};
+ const breakoutScore=breaks?breakStrength/breaks:50;
+ const retestScore=breaks?heldRetests/breaks*100:50;
+ const falseRate=breaks?falseBreaks/breaks:0;
+ const lastC=a.at(-1),range=Math.max(lastC.high-lastC.low,1e-10),body=Math.abs(lastC.close-lastC.open);
+ const bodyRatio=body/range,closeLocation=lastC.close>=lastC.open?(lastC.close-lastC.low)/range:(lastC.high-lastC.close)/range;
+ const candleScore=Math.min(100,bodyRatio*65+closeLocation*35);
+ const noiseRate=recent.filter((c,i)=>i>0&&((c.high-c.low)>atrv*2.2)).length/Math.max(1,recent.length-1);
+ const noiseScore=Math.max(0,100-noiseRate*180-Math.min(40,falseRate*100));
+ const score=Math.round(swingScore*.25+srScore*.20+breakoutScore*.20+retestScore*.15+candleScore*.10+noiseScore*.10);
+ const trend=up>down?'Bullish structure':down>up?'Bearish structure':'Mixed / ranging';
+ return {score,trend,detail:'Swing consistency '+Math.round(swingScore)+' · S/R '+Math.round(srScore)+' · breakout '+Math.round(breakoutScore)+' · retest '+Math.round(retestScore)+' · candle '+Math.round(candleScore)+' · noise '+Math.round(noiseScore),last:last.close,levels:levels(a),metrics:{swingConsistency:Math.round(swingScore),supportResistance:Math.round(srScore),breakoutQuality:Math.round(breakoutScore),retestBehaviour:Math.round(retestScore),candleConfirmation:Math.round(candleScore),noiseControl:Math.round(noiseScore),falseBreakRate:Math.round(falseRate*100)}};
 }
 function candleConfirmation(cs,granularity){
  if(!cs||cs.length<3)return {side:'NONE',pattern:'Insufficient fully closed candles',closed:false};
