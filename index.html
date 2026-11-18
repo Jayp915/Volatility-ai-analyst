@@ -227,7 +227,7 @@ function detectRetestSetup(cs,granularity){
  if(!cs||cs.length<55)return {...empty,reason:'Insufficient closed-candle history.'};
  const now=Math.floor(Date.now()/1000),a=cs.filter(c=>c.epoch+granularity<=now);
  if(a.length<55)return {...empty,reason:'Waiting for sufficient fully closed candles.'};
- const lastIndex=a.length-1,firstBreak=Math.max(8,lastIndex-12);
+ const lastIndex=a.length-1,firstBreak=Math.max(8,lastIndex-20),maxAge=Math.max(1,Math.min(5,Math.ceil(300/granularity)));
  let candidate=null;
  for(let i=firstBreak;i<=lastIndex-2;i++){
   const prefix=a.slice(0,i),p=confirmedPivots(prefix,prefix.length-1),ph=p.highs.at(-1),pl=p.lows.at(-1);
@@ -253,18 +253,31 @@ function detectRetestSetup(cs,granularity){
    }
   }
   if(invalid||retestIndex<0||retestIndex>=lastIndex)continue;
-  const confirmIndex=retestIndex+1;
-  if(confirmIndex!==lastIndex)continue;
-  const r=a[retestIndex],c2=a[confirmIndex],range=Math.max(c2.high-c2.low,1e-12),body=Math.abs(c2.close-c2.open);
-  const upper=c2.high-Math.max(c2.open,c2.close),lower=Math.min(c2.open,c2.close)-c2.low;
-  const bull=c2.close>c2.open&&(body/range>=.55||(lower>=body*1.8&&upper<=body));
-  const bear=c2.close<c2.open&&(body/range>=.55||(upper>=body*1.8&&lower<=body));
-  if(!(side==='BUY'?bull&&c2.close>level:bear&&c2.close<level))continue;
-  candidate={side,type,level,breakout:a[i],retest:r,confirmation:c2,atr:localAtr,pattern:(side==='BUY'?'Bullish':'Bearish')+' retest rejection candle',barsAfterBreak:confirmIndex-i};
+  const confirmIndex=retestIndex+1,confirmation=a[confirmIndex],r=a[retestIndex];
+  const range=Math.max(confirmation.high-confirmation.low,1e-12),body=Math.abs(confirmation.close-confirmation.open);
+  const upper=confirmation.high-Math.max(confirmation.open,confirmation.close),lower=Math.min(confirmation.open,confirmation.close)-confirmation.low;
+  const bull=confirmation.close>confirmation.open&&(body/range>=.55||(lower>=body*1.8&&upper<=body));
+  const bear=confirmation.close<confirmation.open&&(body/range>=.55||(upper>=body*1.8&&lower<=body));
+  if(!(side==='BUY'?bull&&confirmation.close>level:bear&&confirmation.close<level))continue;
+  let laterInvalid=false;
+  for(let k=confirmIndex+1;k<=lastIndex;k++){
+   if(side==='BUY'?a[k].close<level-zone:a[k].close>level+zone){laterInvalid=true;break}
+  }
+  if(laterInvalid)continue;
+  const ageBars=lastIndex-confirmIndex;
+  if(ageBars>maxAge)continue;
+  const drift=side==='BUY'?a[lastIndex].close-confirmation.close:confirmation.close-a[lastIndex].close;
+  if(drift>localAtr*.5)continue;
+  candidate={side,type,level,breakout:a[i],retest:r,confirmation,atr:localAtr,pattern:(side==='BUY'?'Bullish':'Bearish')+' retest rejection candle',barsAfterBreak:confirmIndex-i,ageBars};
  }
- return candidate||{...empty,reason:'No fresh retest-confirmation setup. Setups expire after 10 completed candles or are cancelled when the broken level fails.'};
+ if(candidate)return candidate;
+ return {...empty,reason:'No fresh setup. Confirmation must be recent, price must not have run more than 0.5 ATR, and invalidated or expired setups are rejected.'};
 }
-
+function alignmentScore(side,biases){
+ const wanted=side==='BUY'?'BULLISH':'BEARISH';
+ const values=biases.map(b=>b===wanted?100:(b==='NEUTRAL'||b==='Mixed / ranging'?50:0));
+ return values.length?values.reduce((a,b)=>a+b,0)/values.length:50;
+}
 function recordSignal(signal){
  const key=[signal.symbol,signal.side,signal.tf,signal.epoch].join('|');
  if(seenSignalKeys.has(key))return false;
@@ -302,17 +315,19 @@ async function scanAllMarkets(){
     if(!ws||ws.readyState!==1)throw Error('Deriv connection lost during scan. Reconnect and scan again.');
     try{
      const candles=await getCandles(market.symbol,tf);evaluatePendingSignals(market.symbol,tfName(tf),candles);
-     const st=structureStats(candles);per.push({tf,name:tfName(tf),...st,candles});
-     const retest=detectRetestSetup(candles,tf);
-     const aligned=(retest.side==='BUY'&&st.trend==='Bullish structure')||(retest.side==='SELL'&&st.trend==='Bearish structure');
-     if(st.score>=65&&aligned&&retest.confirmation){
-      const last=retest.confirmation,av=atr(candles),side=retest.side;
-      const entry=last.close,stop=side==='BUY'?Math.min(retest.retest.low-retest.atr*.20,entry-1.2*av):Math.max(retest.retest.high+retest.atr*.20,entry+1.2*av),risk=Math.abs(entry-stop),target=side==='BUY'?entry+2*risk:entry-2*risk;
-      const sig={name:market.display_name||market.symbol,symbol:market.symbol,side,type:retest.type,level:retest.level,breakoutEpoch:retest.breakout.epoch,retestEpoch:retest.retest.epoch,tf:tfName(tf),score:st.score,pattern:retest.pattern,entry,stop,target,epoch:last.epoch};
-      if(recordSignal(sig)){newSignals.push(sig)}
-     }
+     const st=structureStats(candles),retest=detectRetestSetup(candles,tf);per.push({tf,name:tfName(tf),...st,candles,setup:retest});
     }catch(e){fail++;per.push({tf,name:tfName(tf),score:0,trend:'Data unavailable',detail:e.message,candles:[]})}
     done++;$('scanSummary').textContent='Scanning '+market.display_name+' · '+done+'/'+total+' timeframe checks · '+fail+' unavailable';
+   }
+   for(const p of per){
+    const setup=p.setup;if(!setup?.confirmation)continue;
+    const mtfScore=alignmentScore(setup.side,per.filter(x=>x.trend!=='Data unavailable'&&x.trend!=='Insufficient data').map(x=>x.trend==='Bullish structure'?'BULLISH':x.trend==='Bearish structure'?'BEARISH':'NEUTRAL'));
+    const combinedScore=Math.round(p.score*.6+mtfScore*.4);
+    if(combinedScore<65||mtfScore<40)continue;
+    const last=setup.confirmation,av=atr(p.candles),side=setup.side;
+    const entry=last.close,stop=side==='BUY'?Math.min(setup.retest.low-setup.atr*.20,entry-1.2*av):Math.max(setup.retest.high+setup.atr*.20,entry+1.2*av),risk=Math.abs(entry-stop),target=side==='BUY'?entry+2*risk:entry-2*risk;
+    const sig={name:market.display_name||market.symbol,symbol:market.symbol,side,type:setup.type,level:setup.level,breakoutEpoch:setup.breakout.epoch,retestEpoch:setup.retest.epoch,tf:p.name,score:combinedScore,structureScore:p.score,mtfScore:Math.round(mtfScore),ageBars:setup.ageBars,pattern:setup.pattern,entry,stop,target,epoch:last.epoch};
+    if(recordSignal(sig)){newSignals.push(sig)}
    }
    const valid=per.filter(x=>x.trend!=='Data unavailable'&&x.trend!=='Insufficient data'&&x.candles.length>=55);
    const best=valid.slice().sort((x,y)=>y.score-x.score)[0];
@@ -337,7 +352,7 @@ function renderSignals(){
  const pending=signalHistory.filter(s=>s.status==='PENDING').sort((a,b)=>b.score-a.score);
  const buys=pending.filter(s=>s.side==='BUY'),sells=pending.filter(s=>s.side==='SELL');
  $('signalSummary').textContent=pending.length?pending.length+' active confirmed setup(s) · '+signalHistory.filter(s=>s.status!=='PENDING').length+' resolved outcomes':'No active confirmed entries. Signals require a qualifying candle that has closed.';
- const card=s=>'<div class="signal-card '+(s.side==='BUY'?'buy':'sell')+'"><div class="scoreline"><span>'+s.tf+' · Quality '+s.score+'/100</span><b>'+s.side+' · '+(s.type||'SETUP')+'</b></div><div class="name">'+s.name+'</div><div class="small">'+s.pattern+' · Level '+fmt(s.level)+' · '+new Date(s.epoch*1000).toLocaleString()+'</div><div class="signal-price"><div>Entry<br><b>'+fmt(s.entry)+'</b></div><div>Stop loss<br><b>'+fmt(s.stop)+'</b></div><div>Target<br><b>'+fmt(s.target)+'</b></div><div>Tracking<br><b>'+s.status+'</b></div></div></div>';
+ const card=s=>'<div class="signal-card '+(s.side==='BUY'?'buy':'sell')+'"><div class="scoreline"><span>'+s.tf+' · Quality '+s.score+'/100</span><b>'+s.side+' · '+(s.type||'SETUP')+'</b></div><div class="name">'+s.name+'</div><div class="small">'+s.pattern+' · Level '+fmt(s.level)+' · '+(s.ageBars?('Age '+s.ageBars+' bars · '):'')+new Date(s.epoch*1000).toLocaleString()+'</div><div class="signal-price"><div>Entry<br><b>'+fmt(s.entry)+'</b></div><div>Stop loss<br><b>'+fmt(s.stop)+'</b></div><div>Target<br><b>'+fmt(s.target)+'</b></div><div>Tracking<br><b>'+s.status+'</b></div></div></div>';
  $('buySignals').innerHTML=buys.map(card).join('')||'<div class="small">No active BUY setups.</div>';
  $('sellSignals').innerHTML=sells.map(card).join('')||'<div class="small">No active SELL setups.</div>';
 }
@@ -369,20 +384,21 @@ async function analyze(){
  const fastBias=ef>es?'BULLISH':ef<es?'BEARISH':'NEUTRAL';
  const retest=detectRetestSetup(fast,gs[0]),st=structureStats(fast);const confirm=retest.confirmation?{side:retest.side==='BUY'?'BULLISH':'BEARISH',pattern:retest.pattern,closed:true,candle:retest.confirmation}:{side:'NONE',pattern:retest.reason,closed:true};
  const nearRes=(lv.r1-last)<av*.45&&(lv.r1-last)>=0,nearSup=(last-lv.s1)<av*.45&&(last-lv.s1)>=0;
- const long=retest.side==='BUY'&&st.score>=65&&bias==='BULLISH'&&midBias!=='BEARISH'&&fastBias==='BULLISH'&&!nearRes&&rv<75;
- const short=retest.side==='SELL'&&st.score>=65&&bias==='BEARISH'&&midBias!=='BULLISH'&&fastBias==='BEARISH'&&!nearSup&&rv>25;
+ const mtfScore=alignmentScore(retest.side,[bias,midBias,fastBias]),combinedScore=Math.round(st.score*.6+mtfScore*.4);
+ const long=retest.side==='BUY'&&combinedScore>=65&&mtfScore>=40&&!nearRes&&rv<75;
+ const short=retest.side==='SELL'&&combinedScore>=65&&mtfScore>=40&&!nearSup&&rv>25;
  const decision=long?'BUY RETEST CONFIRMED':short?'SELL RETEST CONFIRMED':'NO TRADE';
  const entryPrice=retest.confirmation?.close??last;
  const stop=long?Math.min(retest.retest.low-retest.atr*.20,entryPrice-1.2*av):short?Math.max(retest.retest.high+retest.atr*.20,entryPrice+1.2*av):NaN;
  const target=long?entryPrice+2*(entryPrice-stop):short?entryPrice-2*(stop-entryPrice):NaN;
- const why=['Higher timeframe bias: '+bias,'Middle timeframe bias: '+midBias,'Entry timeframe bias: '+fastBias,'Closed candle: '+confirm.pattern,'Structure quality: '+st.score+'/100 ('+st.trend+')','RSI(14): '+rv.toFixed(1),'Nearest resistance: '+fmt(lv.r1)+' · nearest support: '+fmt(lv.s1)];
+ const why=['Higher timeframe bias: '+bias,'Middle timeframe bias: '+midBias,'Entry timeframe bias: '+fastBias,'Closed candle: '+confirm.pattern,'Structure quality: '+st.score+'/100 ('+st.trend+')','Multi-timeframe alignment: '+Math.round(mtfScore)+'/100 · combined setup score: '+combinedScore+'/100','RSI(14): '+rv.toFixed(1),'Nearest resistance: '+fmt(lv.r1)+' · nearest support: '+fmt(lv.s1)];
  if(!retest.confirmation)why.push(retest.reason);else why.push(retest.type+' confirmed · breakout level '+fmt(retest.level)+' · retest completed after '+retest.barsAfterBreak+' candles.');
- if(confirm.side==='BULLISH'&&!long)why.push('Bullish candle detected, but higher-timeframe alignment, resistance clearance or RSI filter did not confirm a BUY.');
- if(confirm.side==='BEARISH'&&!short)why.push('Bearish candle detected, but higher-timeframe alignment, support clearance or RSI filter did not confirm a SELL.');
+ if(confirm.side==='BULLISH'&&!long)why.push('Bullish setup did not pass the combined quality, resistance or RSI filters.');
+ if(confirm.side==='BEARISH'&&!short)why.push('Bearish setup did not pass the combined quality, support or RSI filters.');
  if(nearRes)why.push('Price is too close to resistance for a fresh BUY.');
  if(nearSup)why.push('Price is too close to support for a fresh SELL.');
  $('symbol').textContent=sym;$('decision').textContent=decision;$('decision').className='decision '+(long?'green':short?'red':'amber');
- $('confidence').textContent='Structure '+st.score+'/100 · 10-candle retest window · '+(retest.type||'No active setup');
+ $('confidence').textContent='Setup '+combinedScore+'/100 · MTF '+Math.round(mtfScore)+'/100 · '+(retest.type||'No active setup');
  $('bias').textContent=bias;$('biasnote').textContent='Mid: '+midBias+' · Entry: '+fastBias;
  $('rr').textContent=long||short?'1 : 2 planned':'No trade plan';
  $('entry').textContent=long||short?fmt(entryPrice):'Wait for retest';
