@@ -1,4 +1,4 @@
-name: Deploy Volatility AI to GitHub Pages
+name: Deploy Nextrade AI to GitHub Pages
 on:
   push:
     branches: ["main"]
