@@ -174,7 +174,7 @@ bool FindLatestSwing(const MqlRates &rates[], const int copied,
    int wing = InpSwingLeftRight;
    int lastIndex = MathMin(InpSwingLookback, copied-wing-1);
    // Smallest eligible index is the most recently confirmed swing.
-   for(int i=wing+1; i<=lastIndex; i++)
+   for(int i=wing+2; i<=lastIndex; i++)
    {
       if(wantHigh && IsSwingHigh(rates, i, wing))
       {
@@ -382,9 +382,9 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam,
 //+------------------------------------------------------------------+
 bool HasOurPosition()
 {
-   if(!PositionSelect(_Symbol))
-      return false;
-   return ((ulong)PositionGetInteger(POSITION_MAGIC) == InpMagicNumber);
+   // One-position-per-symbol guard: also block manual/other-EA positions.
+   // This avoids accidental netting or interference on MT5 netting accounts.
+   return PositionSelect(_Symbol);
 }
 
 //+------------------------------------------------------------------+
