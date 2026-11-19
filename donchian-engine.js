@@ -65,8 +65,9 @@
     const trades=[];let pos=null,ti=0;
     for(let i=1;i<entry.length-1;i++){
       const c=entry[i],next=entry[i+1];
-      while(ti+1<trend.length&&trend[ti+1].epoch<=c.epoch)ti++;
-      const ready=trend[ti]&&trend[ti].epoch<=c.epoch&&fast[ti]!==null&&slow[ti]!==null,atrNow=atr[i];
+      // A 4H candle is usable only after its full 4H interval has closed.
+      while(ti+1<trend.length&&trend[ti+1].epoch+14400<=c.epoch)ti++;
+      const ready=trend[ti]&&trend[ti].epoch+14400<=c.epoch&&fast[ti]!==null&&slow[ti]!==null,atrNow=atr[i];
       if(!Number.isFinite(atrNow)||atrNow<=0)continue;
       if(pos){
         const touched=pos.side==='LONG'?c.low<=pos.stop:c.high>=pos.stop;
