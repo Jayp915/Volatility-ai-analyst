@@ -1,23 +1,20 @@
-# Nextrade AI V5.0
+# Nextrade AI V5.1 — Reliability Edition
 
-A browser-based, analysis-only dashboard for Deriv Volatility Indices.
+Browser-based, analysis-only research and market-structure dashboard for Deriv Volatility Indices.
 
-## Features
-- Public Deriv WebSocket market-data connection (no account token required).
-- Automatic discovery of active Volatility markets.
-- Live tick display and multi-timeframe candle retrieval.
-- EMA trend alignment, RSI, ATR and recent-range support/resistance estimates.
-- Closed-candle BOS/CHoCH breakout → retest → confirmation signal logic.
-- Market-structure quality scoring and multi-timeframe alignment.
-- Signal tracking against later closed candles.
-- Connection heartbeat, stale-connection watchdog and automatic reconnect.
+## V5.1 reliability work
+- Added the missing Donchian research engine referenced by the dashboard.
+- Reproducible historical simulation: 20-bar breakout, completed 4H EMA 50/200 trend filter, next-bar-open entry, 2× ATR initial stop and 10-bar channel exit.
+- Explicit modelled cost of 0.05 ATR per completed trade. This is a research assumption, not a measured Deriv spread or commission.
+- Candle validation, duplicate-timestamp normalization and chronological ordering inside the research engine.
+- Added Node automated tests; GitHub Pages build is gated on tests passing.
+- Analysis-only: no broker order placement or account credentials.
 
-## Open the live app
+## Research limitations
+This engine is an initial reproducible baseline, not proof of profitability. It uses a single historical sample, fixed parameters and a simplified cost model. It does not model tick-level stop ordering, slippage, variable spreads, market impact or all execution constraints. Results must be followed by walk-forward/out-of-sample and demo forward testing before any live-money use.
+
+## Open the app
 https://jayp915.github.io/Volatility-ai-analyst/
 
-## Deploy with GitHub Pages
-The workflow in `.github/workflows/pages.yml` deploys the repository root on pushes to `main`.
-In GitHub, open **Settings → Pages**, choose **GitHub Actions** as the build and deployment source if prompted, then check **Actions** for the deployment result.
-
-## Important
-Nextrade AI is analysis and signal software; it does not submit broker orders. It is not financial advice and the strategy is not yet independently validated as profitable. Historical signal tracking is not a substitute for a proper out-of-sample walk-forward backtest. Verify all signals on Deriv and test on demo before live trading.
+## Deployment
+GitHub Actions runs the strategy-engine test suite on pushes. GitHub Pages deployment is allowed only from main after tests pass. Set Settings → Pages → GitHub Actions if prompted.
